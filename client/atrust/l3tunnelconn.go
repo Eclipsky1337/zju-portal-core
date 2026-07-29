@@ -53,6 +53,7 @@ type l3TunnelConn struct {
 	writeMu       sync.Mutex
 	incoming      chan []byte
 	closeOnce     sync.Once
+	closeErr      error
 	closeCh       chan struct{}
 	errMu         sync.RWMutex
 	terminalErr   error
@@ -186,14 +187,13 @@ func newL3TunnelConn(ctx context.Context, dialTLS func(context.Context, string, 
 }
 
 func (c *l3TunnelConn) Close() error {
-	var err error
 	c.closeOnce.Do(func() {
 		close(c.closeCh)
 		if c.tlsConn != nil {
-			err = c.tlsConn.Close()
+			c.closeErr = c.tlsConn.Close()
 		}
 	})
-	return err
+	return c.closeErr
 }
 
 func (c *l3TunnelConn) fail(err error) {

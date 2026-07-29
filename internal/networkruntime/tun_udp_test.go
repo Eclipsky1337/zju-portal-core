@@ -2,6 +2,7 @@ package networkruntime
 
 import (
 	"context"
+	"errors"
 	"net"
 	"net/netip"
 	"sync"
@@ -68,6 +69,34 @@ func TestTUNUDPFlowLimitEvictsOldest(t *testing.T) {
 		t.Fatalf("flow count = %d", flowCount)
 	}
 }
+
+func TestTUNUDPFlowClosePreservesError(t *testing.T) {
+	wantErr := errors.New("activity close failed")
+	created, err := newTUNService(TUNConfig{}, &udpFlowOutboundStub{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := created.(*tunService)
+	association := &tunUDPAssociation{service: service, flows: make(map[string]*tunUDPFlow)}
+	flow := &tunUDPFlow{association: association, address: "192.0.2.1:53", activity: udpFlowActivityStub{closeErr: wantErr}}
+	association.flows[flow.address] = flow
+	service.registerUDPFlow(flow)
+
+	if err := flow.Close(); !errors.Is(err, wantErr) {
+		t.Fatalf("Close() error = %v", err)
+	}
+	if err := flow.Close(); !errors.Is(err, wantErr) {
+		t.Fatalf("second Close() error = %v", err)
+	}
+}
+
+type udpFlowActivityStub struct {
+	closeErr error
+}
+
+func (udpFlowActivityStub) RecordUploaded(uint64)   {}
+func (udpFlowActivityStub) RecordDownloaded(uint64) {}
+func (activity udpFlowActivityStub) Close() error   { return activity.closeErr }
 
 type udpFlowOutboundStub struct {
 	mu    sync.Mutex

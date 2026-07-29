@@ -32,6 +32,7 @@ type tunUDPFlow struct {
 	activity    core.ConnectionActivity
 	lastActive  atomic.Int64
 	closeOnce   sync.Once
+	closeErr    error
 }
 
 func (service *tunService) NewPacketConnection(ctx context.Context, inbound N.PacketConn, metadata M.Metadata) error {
@@ -187,7 +188,6 @@ func (flow *tunUDPFlow) readResponses() {
 }
 
 func (flow *tunUDPFlow) Close() error {
-	var closeErr error
 	flow.closeOnce.Do(func() {
 		flow.association.mu.Lock()
 		if flow.association.flows[flow.address] == flow {
@@ -196,12 +196,12 @@ func (flow *tunUDPFlow) Close() error {
 		flow.association.mu.Unlock()
 		flow.association.service.unregisterUDPFlow(flow)
 		if flow.activity != nil {
-			closeErr = flow.activity.Close()
+			flow.closeErr = flow.activity.Close()
 		} else {
-			closeErr = flow.remote.Close()
+			flow.closeErr = flow.remote.Close()
 		}
 	})
-	return closeErr
+	return flow.closeErr
 }
 
 func (flow *tunUDPFlow) touch() { flow.lastActive.Store(time.Now().UnixNano()) }

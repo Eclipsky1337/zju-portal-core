@@ -31,9 +31,10 @@ func (c *L3Conn) Write(p []byte) (n int, err error) {
 	if err := connectionContextError(c.ctx); err != nil {
 		return 0, err
 	}
-	n = len(p)
-	err = c.l3Tunnel.processIPV4(p)
-	return n, err
+	if err := c.l3Tunnel.processIPV4(p); err != nil {
+		return 0, err
+	}
+	return len(p), nil
 }
 
 func (c *L3Conn) Close() error {

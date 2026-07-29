@@ -11,15 +11,26 @@ import (
 )
 
 func (t *L3Tunnel) processIPV4(packet zctcpip.IPv4Packet) error {
+	if !packet.Valid() {
+		return fmt.Errorf("invalid IPv4 packet length %d", len(packet))
+	}
 	protocol := ""
 	port := -1
 	switch packet.Protocol() {
 	case zctcpip.TCP:
 		protocol = "tcp"
-		port = int(zctcpip.TCPPacket(packet.Payload()).DestinationPort())
+		tcpPacket := zctcpip.TCPPacket(packet.Payload())
+		if !tcpPacket.Valid() {
+			return fmt.Errorf("invalid TCP packet length %d", len(tcpPacket))
+		}
+		port = int(tcpPacket.DestinationPort())
 	case zctcpip.UDP:
 		protocol = "udp"
-		port = int(zctcpip.UDPPacket(packet.Payload()).DestinationPort())
+		udpPacket := zctcpip.UDPPacket(packet.Payload())
+		if !udpPacket.Valid() {
+			return fmt.Errorf("invalid UDP packet length %d", len(udpPacket))
+		}
+		port = int(udpPacket.DestinationPort())
 	case zctcpip.ICMP:
 		protocol = "icmp"
 	default:

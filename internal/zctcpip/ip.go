@@ -47,5 +47,10 @@ func (p IPv4Packet) DestinationIP() net.IP {
 }
 
 func (p IPv4Packet) Valid() bool {
-	return len(p) >= IPv4HeaderSize && p.TotalLen() >= p.HeaderLen() && uint16(len(p)) >= p.TotalLen()
+	if len(p) < IPv4HeaderSize || p[0]>>4 != IPv4Version {
+		return false
+	}
+	headerLength := p.HeaderLen()
+	totalLength := p.TotalLen()
+	return headerLength >= IPv4HeaderSize && totalLength >= headerLength && uint16(len(p)) >= totalLength
 }

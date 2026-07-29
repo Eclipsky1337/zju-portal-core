@@ -269,6 +269,49 @@ func TestResolverSharesAndCachesSecondaryFallback(t *testing.T) {
 	}
 }
 
+func TestResolverFollowerHonorsContextCancellation(t *testing.T) {
+	remoteEntered := make(chan struct{})
+	releaseRemote := make(chan struct{})
+	var enteredOnce sync.Once
+	remote, closeRemote := startResolverTestDNS(t, func(_ string, request *dns.Msg) *dns.Msg {
+		enteredOnce.Do(func() { close(remoteEntered) })
+		<-releaseRemote
+		response := new(dns.Msg)
+		response.SetReply(request)
+		response.Answer = append(response.Answer, &dns.A{
+			Hdr: dns.RR_Header{Name: request.Question[0].Name, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 60},
+			A:   net.ParseIP("10.0.0.8"),
+		})
+		return response
+	})
+	defer closeRemote()
+	resolver := newResolverForFallbackTest(remote, remote)
+	leaderDone := make(chan error, 1)
+	go func() {
+		_, _, err := resolver.Resolve(context.Background(), "app.example.edu")
+		leaderDone <- err
+	}()
+	select {
+	case <-remoteEntered:
+	case <-time.After(time.Second):
+		t.Fatal("leader DNS query did not start")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	startedAt := time.Now()
+	if _, _, err := resolver.Resolve(ctx, "app.example.edu"); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("follower Resolve() error = %v", err)
+	}
+	if elapsed := time.Since(startedAt); elapsed > 250*time.Millisecond {
+		t.Fatalf("canceled follower waited %s", elapsed)
+	}
+	close(releaseRemote)
+	if err := <-leaderDone; err != nil {
+		t.Fatal(err)
+	}
+}
+
 func newResolverForFallbackTest(remoteAddress, secondaryAddress string) *Resolver {
 	return &Resolver{
 		remoteUDPResolver: resolverForAddress(remoteAddress, "udp"),

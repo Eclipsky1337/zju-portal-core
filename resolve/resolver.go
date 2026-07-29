@@ -11,6 +11,7 @@ import (
 	"github.com/Eclipsky1337/zju-portal-core/client"
 	"github.com/Eclipsky1337/zju-portal-core/log"
 	"github.com/patrickmn/go-cache"
+	"golang.org/x/sync/singleflight"
 )
 
 type Resolver struct {
@@ -30,11 +31,8 @@ type Resolver struct {
 	timer  *time.Timer
 	useTCP bool
 	// check to use tcp resolver or udp resolver
-	tcpLock sync.RWMutex
-	// check to handle concurrent same dns query
-	// only the goroutine which get the lock can use remoteResolver
-	// MUST handler lock/unlock carefully!
-	concurResolveLock sync.Map
+	tcpLock      sync.RWMutex
+	resolveGroup singleflight.Group
 
 	closeOnce sync.Once
 }
@@ -74,67 +72,74 @@ func (r *Resolver) Resolve(ctx context.Context, host string) (resCtx context.Con
 	}
 
 	if r.useRemoteDNS {
-		r.tcpLock.RLock()
-		useTCP := r.useTCP
-		r.tcpLock.RUnlock()
-		resolveLockItem, _ := r.concurResolveLock.LoadOrStore(host, new(sync.Mutex))
-		resolveLock := resolveLockItem.(*sync.Mutex)
-		if resolveLock.TryLock() {
-			if !useTCP {
-				ips, err := r.lookupRemoteIP(ctx, r.remoteUDPResolver, host)
-				if err != nil {
-					if ips, err = r.lookupRemoteIP(ctx, r.remoteTCPResolver, host); err != nil {
-						log.Printf("Resolve IPv4 addr failed using remote UDP/TCP DNS: %s, using secondary DNS instead", host)
-						resolvedCtx, address, resolveErr := r.ResolveWithSecondaryDNS(ctx, host)
-						resolveLock.Unlock()
-						return resolvedCtx, address, resolveErr
-					} else {
-						r.tcpLock.Lock()
-						r.useTCP = true
-						if r.timer == nil {
-							r.timer = time.AfterFunc(10*time.Minute, func() {
-								r.tcpLock.Lock()
-								r.useTCP = false
-								r.timer = nil
-								r.tcpLock.Unlock()
-							})
-						}
-						r.tcpLock.Unlock()
-					}
+		for {
+			result := r.resolveGroup.DoChan(host, func() (any, error) {
+				return r.resolveRemote(ctx, host)
+			})
+			select {
+			case <-ctx.Done():
+				return ctx, nil, ctx.Err()
+			case resolved := <-result:
+				if resolved.Shared && ctx.Err() == nil && (errors.Is(resolved.Err, context.Canceled) || errors.Is(resolved.Err, context.DeadlineExceeded)) {
+					continue
 				}
-				// Set DNS cache if tcp or udp DNS success
-				r.setDNSCache(host, ips[0])
-				resolveLock.Unlock()
-				log.Printf("%s -> %s", host, ips[0].String())
-				return ctx, ips[0], nil
-			} else {
-				// Only try tcp and secondary DNS
-				if ips, err := r.lookupRemoteIP(ctx, r.remoteTCPResolver, host); err != nil {
-					log.Printf("Resolve IPv4 addr failed using remote TCP DNS: %s, using secondary DNS instead", host)
-					resolvedCtx, address, resolveErr := r.ResolveWithSecondaryDNS(ctx, host)
-					resolveLock.Unlock()
-					return resolvedCtx, address, resolveErr
-				} else {
-					r.setDNSCache(host, ips[0])
-					resolveLock.Unlock()
-					log.Printf("%s -> %s", host, ips[0].String())
-					return ctx, ips[0], nil
+				if resolved.Err != nil {
+					return ctx, nil, resolved.Err
 				}
+				address := resolved.Val.(net.IP)
+				return ctx, address, nil
 			}
-		} else {
-			// waiting dns query for remoteResolve finish
-			resolveLock.Lock()
-			cachedIP, found := r.getDNSCache(host)
-			resolveLock.Unlock()
-			// if host handled by remoteResolver, it must exist in DNSCache
-			if found {
-				return ctx, cachedIP, nil
-			}
-			return r.ResolveWithSecondaryDNS(ctx, host)
 		}
 	} else {
 		return r.ResolveWithSecondaryDNS(ctx, host)
 	}
+}
+
+func (r *Resolver) resolveRemote(ctx context.Context, host string) (net.IP, error) {
+	r.tcpLock.RLock()
+	useTCP := r.useTCP
+	r.tcpLock.RUnlock()
+	if useTCP {
+		ips, err := r.lookupRemoteIP(ctx, r.remoteTCPResolver, host)
+		if err != nil {
+			log.Printf("Resolve IPv4 addr failed using remote TCP DNS: %s, using secondary DNS instead", host)
+			_, address, resolveErr := r.ResolveWithSecondaryDNS(ctx, host)
+			return address, resolveErr
+		}
+		return r.cacheRemoteResult(host, ips)
+	}
+
+	ips, err := r.lookupRemoteIP(ctx, r.remoteUDPResolver, host)
+	if err != nil {
+		ips, err = r.lookupRemoteIP(ctx, r.remoteTCPResolver, host)
+		if err != nil {
+			log.Printf("Resolve IPv4 addr failed using remote UDP/TCP DNS: %s, using secondary DNS instead", host)
+			_, address, resolveErr := r.ResolveWithSecondaryDNS(ctx, host)
+			return address, resolveErr
+		}
+		r.tcpLock.Lock()
+		r.useTCP = true
+		if r.timer == nil {
+			r.timer = time.AfterFunc(10*time.Minute, func() {
+				r.tcpLock.Lock()
+				r.useTCP = false
+				r.timer = nil
+				r.tcpLock.Unlock()
+			})
+		}
+		r.tcpLock.Unlock()
+	}
+	return r.cacheRemoteResult(host, ips)
+}
+
+func (r *Resolver) cacheRemoteResult(host string, addresses []net.IP) (net.IP, error) {
+	if len(addresses) == 0 {
+		return nil, errors.New("remote DNS returned no IPv4 addresses")
+	}
+	address := addresses[0]
+	r.setDNSCache(host, address)
+	log.Printf("%s -> %s", host, address.String())
+	return address, nil
 }
 
 func (r *Resolver) IsVPNDomain(host string) bool {

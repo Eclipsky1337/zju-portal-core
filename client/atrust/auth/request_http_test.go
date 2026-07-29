@@ -3,6 +3,7 @@ package auth
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -156,3 +157,27 @@ func TestAuthConfigRejectsMalformedServerURL(t *testing.T) {
 		t.Fatal("authConfig() accepted malformed server URL")
 	}
 }
+
+func TestAuthConfigPropagatesResponseReadError(t *testing.T) {
+	wantErr := errors.New("response read failed")
+	session := NewSession("gateway.test")
+	session.client = &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(errorReader{err: wantErr}), Request: request}, nil
+	})}
+	if _, _, err := session.authConfig(context.Background(), false, false); !errors.Is(err, wantErr) {
+		t.Fatalf("authConfig() error = %v", err)
+	}
+}
+
+func TestReadAuthResponseRejectsOversizedBody(t *testing.T) {
+	response := &http.Response{Body: io.NopCloser(strings.NewReader(strings.Repeat("x", maxAuthResponseBodySize+1)))}
+	if _, err := readAuthResponse(response); err == nil {
+		t.Fatal("oversized authentication response was accepted")
+	}
+}
+
+type errorReader struct {
+	err error
+}
+
+func (reader errorReader) Read([]byte) (int, error) { return 0, reader.err }

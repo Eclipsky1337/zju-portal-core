@@ -81,7 +81,10 @@ func (s *Session) sendSms(ctx context.Context, phone, loginDomain, graphCheckCod
 	defer func(Body io.ReadCloser) {
 		_ = Body.Close()
 	}(resp.Body)
-	body, _ := io.ReadAll(resp.Body)
+	body, err := readAuthResponse(resp)
+	if err != nil {
+		return 0, err
+	}
 	log.DebugPrintf("Received sendSms: %s", string(body))
 
 	var re struct {
@@ -136,7 +139,10 @@ func (s *Session) smsCheckCodeImpl(ctx context.Context, code, phone, loginDomain
 	defer func(Body io.ReadCloser) {
 		_ = Body.Close()
 	}(resp.Body)
-	body, _ := io.ReadAll(resp.Body)
+	body, err := readAuthResponse(resp)
+	if err != nil {
+		return 0, err
+	}
 	log.DebugPrintf("Received smsCheckCode: %s", string(body))
 
 	var re struct {

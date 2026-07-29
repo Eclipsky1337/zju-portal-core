@@ -45,7 +45,10 @@ func (s *Session) authConfig(ctx context.Context, mod, needTicket bool) (int, []
 	defer func(Body io.ReadCloser) {
 		_ = Body.Close()
 	}(resp.Body)
-	body, _ := io.ReadAll(resp.Body)
+	body, err := readAuthResponse(resp)
+	if err != nil {
+		return 0, nil, err
+	}
 	log.DebugPrintf("Received auth config: %s", string(body))
 
 	var re struct {
@@ -117,7 +120,10 @@ func (s *Session) reportEnv(ctx context.Context) error {
 	defer func(Body io.ReadCloser) {
 		_ = Body.Close()
 	}(resp.Body)
-	body, _ = io.ReadAll(resp.Body)
+	body, err = readAuthResponse(resp)
+	if err != nil {
+		return err
+	}
 	log.DebugPrintf("Received report env: %s", string(body))
 
 	var re struct {
@@ -220,7 +226,10 @@ func (s *Session) authCheck(ctx context.Context) (authStep, error) {
 	defer func(Body io.ReadCloser) {
 		_ = Body.Close()
 	}(resp.Body)
-	body, _ := io.ReadAll(resp.Body)
+	body, err := readAuthResponse(resp)
+	if err != nil {
+		return authStep{}, err
+	}
 	log.DebugPrintf("Received auth check: %s", string(body))
 
 	var ac struct {
@@ -264,7 +273,10 @@ func (s *Session) phoneNumber(ctx context.Context, authID string) ([]string, err
 	defer func(Body io.ReadCloser) {
 		_ = Body.Close()
 	}(resp.Body)
-	body, _ := io.ReadAll(resp.Body)
+	body, err := readAuthResponse(resp)
+	if err != nil {
+		return nil, err
+	}
 
 	var re struct {
 		Code    int    `json:"code"`
@@ -349,7 +361,10 @@ func (s *Session) authSms(ctx context.Context, step authStep) error {
 	defer func(Body io.ReadCloser) {
 		_ = Body.Close()
 	}(resp.Body)
-	body, _ := io.ReadAll(resp.Body)
+	body, err := readAuthResponse(resp)
+	if err != nil {
+		return err
+	}
 	log.DebugPrintf("Received send sms: %s", string(body))
 
 	var re struct {
@@ -446,7 +461,10 @@ func (s *Session) secondarySMSCheckCodeImpl(ctx context.Context, step authStep, 
 	defer func(Body io.ReadCloser) {
 		_ = Body.Close()
 	}(resp.Body)
-	body, _ := io.ReadAll(resp.Body)
+	body, err := readAuthResponse(resp)
+	if err != nil {
+		return authStep{}, err
+	}
 	log.DebugPrintf("Received sms check: %s", string(body))
 
 	var re struct {
@@ -487,7 +505,10 @@ func (s *Session) onlineInfo(ctx context.Context) (string, error) {
 	defer func(Body io.ReadCloser) {
 		_ = Body.Close()
 	}(resp.Body)
-	body, _ := io.ReadAll(resp.Body)
+	body, err := readAuthResponse(resp)
+	if err != nil {
+		return "", err
+	}
 	log.DebugPrintf("Received online info: %s", string(body))
 
 	var re struct {
@@ -547,7 +568,10 @@ func (s *Session) ClientResourceContext(ctx context.Context) ([]byte, error) {
 	defer func(Body io.ReadCloser) {
 		_ = Body.Close()
 	}(resp.Body)
-	body, _ := io.ReadAll(resp.Body)
+	body, err := readAuthResponse(resp)
+	if err != nil {
+		return nil, err
+	}
 	log.DebugPrintf("Received client resource: %s", string(body))
 
 	return body, nil

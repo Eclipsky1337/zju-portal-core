@@ -39,7 +39,10 @@ func (s *Session) QueryDevice() (*QueryDeviceResult, error) {
 	defer func(Body io.ReadCloser) {
 		_ = Body.Close()
 	}(resp.Body)
-	body, _ := io.ReadAll(resp.Body)
+	body, err := readAuthResponse(resp)
+	if err != nil {
+		return nil, err
+	}
 	log.DebugPrintf("Received query device: %s", string(body))
 
 	var re struct {
@@ -91,7 +94,10 @@ func (s *Session) TrustDevice(idList []string) error {
 	defer func(Body io.ReadCloser) {
 		_ = Body.Close()
 	}(resp.Body)
-	body, _ := io.ReadAll(resp.Body)
+	body, err := readAuthResponse(resp)
+	if err != nil {
+		return err
+	}
 	log.DebugPrintf("Received trust device: %s", string(body))
 
 	var re struct {
@@ -136,7 +142,10 @@ func (s *Session) UntrustDevice(idList []string) error {
 	defer func(Body io.ReadCloser) {
 		_ = Body.Close()
 	}(resp.Body)
-	body, _ := io.ReadAll(resp.Body)
+	body, err := readAuthResponse(resp)
+	if err != nil {
+		return err
+	}
 	log.DebugPrintf("Received untrust device: %s", string(body))
 
 	var re struct {

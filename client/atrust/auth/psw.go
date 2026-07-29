@@ -84,7 +84,10 @@ func (s *Session) pswImpl(ctx context.Context, username, password, loginDomain, 
 	defer func(Body io.ReadCloser) {
 		_ = Body.Close()
 	}(resp.Body)
-	body, _ := io.ReadAll(resp.Body)
+	body, err := readAuthResponse(resp)
+	if err != nil {
+		return 0, err
+	}
 	log.DebugPrintf("Received psw: %s", string(body))
 
 	var re struct {

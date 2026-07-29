@@ -27,6 +27,22 @@ func newRequest(ctx context.Context, method, target string, body io.Reader) (*ht
 	return request, nil
 }
 
+const maxAuthResponseBodySize = 4 << 20
+
+func readAuthResponse(response *http.Response) ([]byte, error) {
+	if response == nil || response.Body == nil {
+		return nil, fmt.Errorf("read authentication response: response body is unavailable")
+	}
+	body, err := io.ReadAll(io.LimitReader(response.Body, maxAuthResponseBodySize+1))
+	if err != nil {
+		return nil, fmt.Errorf("read authentication response: %w", err)
+	}
+	if len(body) > maxAuthResponseBodySize {
+		return nil, fmt.Errorf("authentication response exceeds %d bytes", maxAuthResponseBodySize)
+	}
+	return body, nil
+}
+
 const (
 	UserAgent    = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) aTrustTray/2.4.10.50 Chrome/83.0.4103.94 Electron/9.0.2 Safari/537.36 aTrustTray-Linux-Plat-Ubuntu-x64 SPCClientType"
 	maxAttempts  = 5

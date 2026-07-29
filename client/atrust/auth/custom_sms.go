@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 
@@ -61,7 +60,7 @@ func (s *Session) sendCustomSMS(ctx context.Context) error {
 	}
 	defer resp.Body.Close()
 
-	body, err = io.ReadAll(resp.Body)
+	body, err = readAuthResponse(resp)
 	if err != nil {
 		return err
 	}
@@ -125,7 +124,7 @@ func (s *Session) customSMSCheckCode(ctx context.Context, code string, skipSecon
 	}
 	defer resp.Body.Close()
 
-	body, err = io.ReadAll(resp.Body)
+	body, err = readAuthResponse(resp)
 	if err != nil {
 		return authStep{}, err
 	}

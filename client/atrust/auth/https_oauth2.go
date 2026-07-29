@@ -132,7 +132,10 @@ func (s *Session) httpsOauth2(ctx context.Context, callback string) error {
 		return err
 	}
 
-	body, _ := io.ReadAll(resp.Body)
+	body, err := readAuthResponse(resp)
+	if err != nil {
+		return err
+	}
 	log.DebugPrintf("Received httpsOauth2 data: %s", string(body))
 
 	s.ticket = ticket

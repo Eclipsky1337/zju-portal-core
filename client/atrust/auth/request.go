@@ -28,7 +28,10 @@ func (s *Session) authConfig(ctx context.Context, mod, needTicket bool) (int, []
 	}
 
 	u := s.baseURL + "/passport/v1/public/authConfig"
-	req, _ := http.NewRequestWithContext(ctx, "GET", u+"?"+params.Encode(), nil)
+	req, err := newRequest(ctx, "GET", u+"?"+params.Encode(), nil)
+	if err != nil {
+		return 0, nil, err
+	}
 	req.Header.Set("User-Agent", UserAgent)
 	req.Header.Set("x-csrf-token", s.csrfToken)
 	req.Header.Set("x-sdp-rid", s.rid)
@@ -98,7 +101,10 @@ func (s *Session) reportEnv(ctx context.Context) error {
 	}
 	body, _ := json.Marshal(payload)
 	log.DebugPrintf("Sending report env: %s", string(body))
-	req, _ := http.NewRequestWithContext(ctx, "POST", u+"?"+WithSharedParams(nil).Encode(), bytes.NewReader(body))
+	req, err := newRequest(ctx, "POST", u+"?"+WithSharedParams(nil).Encode(), bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
 	req.Header.Set("User-Agent", UserAgent)
 	req.Header.Set("Content-Type", "application/json;charset=utf-8")
 	req.Header.Set("x-csrf-token", s.csrfToken)
@@ -199,7 +205,10 @@ func (s *Session) authCheck(ctx context.Context) (authStep, error) {
 	log.Println("Perform GET /passport/v1/auth/authCheck")
 
 	u := s.baseURL + "/passport/v1/auth/authCheck"
-	req, _ := http.NewRequestWithContext(ctx, "GET", u+"?"+WithSharedParams(nil).Encode(), nil)
+	req, err := newRequest(ctx, "GET", u+"?"+WithSharedParams(nil).Encode(), nil)
+	if err != nil {
+		return authStep{}, err
+	}
 	req.Header.Set("User-Agent", UserAgent)
 	req.Header.Set("x-csrf-token", s.csrfToken)
 	req.Header.Set("x-sdp-traceid", s.randSdpId())
@@ -240,7 +249,10 @@ func (s *Session) phoneNumber(ctx context.Context, authID string) ([]string, err
 	if authID != "" {
 		params.Set("authId", authID)
 	}
-	req, _ := http.NewRequestWithContext(ctx, "GET", u+"?"+params.Encode(), nil)
+	req, err := newRequest(ctx, "GET", u+"?"+params.Encode(), nil)
+	if err != nil {
+		return nil, err
+	}
 	req.Header.Set("User-Agent", UserAgent)
 	req.Header.Set("x-csrf-token", s.csrfToken)
 	req.Header.Set("x-sdp-traceid", s.randSdpId())
@@ -322,7 +334,10 @@ func (s *Session) authSms(ctx context.Context, step authStep) error {
 	default:
 		return fmt.Errorf("unknown SMS authentication mode")
 	}
-	req, _ := http.NewRequestWithContext(ctx, "GET", u+"?"+params.Encode(), nil)
+	req, err := newRequest(ctx, "GET", u+"?"+params.Encode(), nil)
+	if err != nil {
+		return err
+	}
 	req.Header.Set("User-Agent", UserAgent)
 	req.Header.Set("x-csrf-token", s.csrfToken)
 	req.Header.Set("x-sdp-traceid", s.randSdpId())
@@ -393,7 +408,11 @@ func (s *Session) secondarySMSCheckCodeImpl(ctx context.Context, step authStep, 
 			"code":              {code},
 			"skipSecondaryAuth": {skipSecondaryAuthStr},
 		}
-		req, _ = http.NewRequestWithContext(ctx, "POST", u+"?"+params.Encode(), strings.NewReader(form.Encode()))
+		var err error
+		req, err = newRequest(ctx, "POST", u+"?"+params.Encode(), strings.NewReader(form.Encode()))
+		if err != nil {
+			return authStep{}, err
+		}
 		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	case smsWithAuthID:
 		if step.AuthID == "" {
@@ -407,7 +426,11 @@ func (s *Session) secondarySMSCheckCodeImpl(ctx context.Context, step authStep, 
 			"authId":            step.AuthID,
 		}
 		bdy, _ := json.Marshal(payload)
-		req, _ = http.NewRequestWithContext(ctx, "POST", u+"?"+params.Encode(), bytes.NewReader(bdy))
+		var err error
+		req, err = newRequest(ctx, "POST", u+"?"+params.Encode(), bytes.NewReader(bdy))
+		if err != nil {
+			return authStep{}, err
+		}
 		req.Header.Set("Content-Type", "application/json;charset=utf-8")
 	default:
 		return authStep{}, fmt.Errorf("unknown SMS authentication mode")
@@ -449,7 +472,10 @@ func (s *Session) onlineInfo(ctx context.Context) (string, error) {
 	log.Println("Perform GET /passport/v1/user/onlineInfo")
 
 	u := s.baseURL + "/passport/v1/user/onlineInfo"
-	req, _ := http.NewRequestWithContext(ctx, "GET", u+"?"+WithSharedParams(nil).Encode(), nil)
+	req, err := newRequest(ctx, "GET", u+"?"+WithSharedParams(nil).Encode(), nil)
+	if err != nil {
+		return "", err
+	}
 	req.Header.Set("User-Agent", UserAgent)
 	req.Header.Set("x-csrf-token", s.csrfToken)
 	req.Header.Set("x-sdp-traceid", s.randSdpId())
@@ -505,7 +531,10 @@ func (s *Session) ClientResourceContext(ctx context.Context) ([]byte, error) {
 		},
 	}
 	bdy, _ := json.Marshal(payload)
-	req, _ := http.NewRequestWithContext(ctx, "POST", u+"?"+WithSharedParams(nil).Encode(), bytes.NewReader(bdy))
+	req, err := newRequest(ctx, "POST", u+"?"+WithSharedParams(nil).Encode(), bytes.NewReader(bdy))
+	if err != nil {
+		return nil, err
+	}
 	req.Header.Set("User-Agent", UserAgent)
 	req.Header.Set("Content-Type", "application/json;charset=utf-8")
 	req.Header.Set("x-csrf-token", s.csrfToken)
@@ -531,7 +560,10 @@ func (s *Session) checkCode(ctx context.Context) ([]byte, error) {
 	params := WithSharedParams(url.Values{
 		"rnd": {strconv.FormatInt(time.Now().UnixMilli(), 10)},
 	})
-	req, _ := http.NewRequestWithContext(ctx, "GET", u+"?"+params.Encode(), nil)
+	req, err := newRequest(ctx, "GET", u+"?"+params.Encode(), nil)
+	if err != nil {
+		return nil, err
+	}
 	req.Header.Set("User-Agent", UserAgent)
 	req.Header.Set("Accept", "image/webp,image/apng,image/*,*/*;q=0.8")
 

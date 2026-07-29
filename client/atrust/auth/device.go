@@ -2,10 +2,10 @@ package auth
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
-	"net/http"
 	"net/url"
 
 	"github.com/Eclipsky1337/zju-portal-core/log"
@@ -23,7 +23,10 @@ func (s *Session) QueryDevice() (*QueryDeviceResult, error) {
 	params := WithSharedParams(url.Values{
 		"status": {"trust"}, // can be "trust" or "untrust" but no need
 	})
-	req, _ := http.NewRequest("GET", u+"?"+params.Encode(), nil)
+	req, err := newRequest(context.Background(), "GET", u+"?"+params.Encode(), nil)
+	if err != nil {
+		return nil, err
+	}
 	req.Header.Set("User-Agent", UserAgent)
 	req.Header.Set("Content-Type", "application/json;charset=utf-8")
 	req.Header.Set("x-csrf-token", s.csrfToken)
@@ -72,7 +75,10 @@ func (s *Session) TrustDevice(idList []string) error {
 		"idList": idList,
 	}
 	bdy, _ := json.Marshal(payload)
-	req, _ := http.NewRequest("POST", u+"?"+WithSharedParams(nil).Encode(), bytes.NewReader(bdy))
+	req, err := newRequest(context.Background(), "POST", u+"?"+WithSharedParams(nil).Encode(), bytes.NewReader(bdy))
+	if err != nil {
+		return err
+	}
 	req.Header.Set("User-Agent", UserAgent)
 	req.Header.Set("Content-Type", "application/json;charset=utf-8")
 	req.Header.Set("x-csrf-token", s.csrfToken)
@@ -114,7 +120,10 @@ func (s *Session) UntrustDevice(idList []string) error {
 		"idList": idList,
 	}
 	bdy, _ := json.Marshal(payload)
-	req, _ := http.NewRequest("POST", u+"?"+WithSharedParams(nil).Encode(), bytes.NewReader(bdy))
+	req, err := newRequest(context.Background(), "POST", u+"?"+WithSharedParams(nil).Encode(), bytes.NewReader(bdy))
+	if err != nil {
+		return err
+	}
 	req.Header.Set("User-Agent", UserAgent)
 	req.Header.Set("Content-Type", "application/json;charset=utf-8")
 	req.Header.Set("x-csrf-token", s.csrfToken)

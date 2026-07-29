@@ -9,7 +9,6 @@ import (
 	"encoding/json"
 	"io"
 	"math/big"
-	"net/http"
 	"strconv"
 
 	"github.com/Eclipsky1337/zju-portal-core/log"
@@ -68,7 +67,10 @@ func (s *Session) pswImpl(ctx context.Context, username, password, loginDomain, 
 	postBody, _ := json.Marshal(data)
 
 	u := s.baseURL + "/passport/v1/auth/psw"
-	req, _ := http.NewRequestWithContext(ctx, "POST", u+"?"+WithSharedParams(nil).Encode(), bytes.NewReader(postBody))
+	req, err := newRequest(ctx, "POST", u+"?"+WithSharedParams(nil).Encode(), bytes.NewReader(postBody))
+	if err != nil {
+		return 0, err
+	}
 	req.Header.Set("User-Agent", UserAgent)
 	req.Header.Set("Content-Type", "application/json;charset=utf-8")
 	req.Header.Set("x-csrf-token", s.csrfToken)

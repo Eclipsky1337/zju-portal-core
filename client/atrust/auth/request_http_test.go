@@ -149,3 +149,10 @@ func jsonResponse(request *http.Request, body string) *http.Response {
 		Request:    request,
 	}
 }
+
+func TestAuthConfigRejectsMalformedServerURL(t *testing.T) {
+	session := NewSession("%")
+	if _, _, err := session.authConfig(context.Background(), false, false); err == nil {
+		t.Fatal("authConfig() accepted malformed server URL")
+	}
+}

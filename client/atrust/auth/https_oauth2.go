@@ -101,7 +101,10 @@ func validateHTTPSOauth2CallbackURL(callbackURL *url.URL, baseHost string) error
 func (s *Session) httpsOauth2(ctx context.Context, callback string) error {
 	log.Println("Perform GET /passport/v1/auth/httpsOauth2")
 
-	req, _ := http.NewRequestWithContext(ctx, "GET", callback, nil)
+	req, err := newRequest(ctx, "GET", callback, nil)
+	if err != nil {
+		return err
+	}
 	req.Header.Set("User-Agent", UserAgent)
 	req.Header.Set("x-csrf-token", s.csrfToken)
 	req.Header.Set("x-sdp-traceid", s.randSdpId())

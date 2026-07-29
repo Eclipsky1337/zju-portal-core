@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	mathrand "math/rand"
 	"net"
 	"net/http"
@@ -17,6 +18,14 @@ import (
 	"github.com/Eclipsky1337/zju-portal-core/core"
 	"github.com/Eclipsky1337/zju-portal-core/log"
 )
+
+func newRequest(ctx context.Context, method, target string, body io.Reader) (*http.Request, error) {
+	request, err := http.NewRequestWithContext(ctx, method, target, body)
+	if err != nil {
+		return nil, fmt.Errorf("create authentication HTTP request: %w", err)
+	}
+	return request, nil
+}
 
 const (
 	UserAgent    = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) aTrustTray/2.4.10.50 Chrome/83.0.4103.94 Electron/9.0.2 Safari/537.36 aTrustTray-Linux-Plat-Ubuntu-x64 SPCClientType"

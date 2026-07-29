@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"io"
-	"net/http"
 
 	"github.com/Eclipsky1337/zju-portal-core/core"
 	"github.com/Eclipsky1337/zju-portal-core/log"
@@ -65,7 +64,10 @@ func (s *Session) sendSms(ctx context.Context, phone, loginDomain, graphCheckCod
 	postBody, _ := json.Marshal(data)
 
 	u := s.baseURL + "/passport/v1/public/sendSms"
-	req, _ := http.NewRequestWithContext(ctx, "POST", u+"?"+WithSharedParams(nil).Encode(), bytes.NewReader(postBody))
+	req, err := newRequest(ctx, "POST", u+"?"+WithSharedParams(nil).Encode(), bytes.NewReader(postBody))
+	if err != nil {
+		return 0, err
+	}
 	req.Header.Set("User-Agent", UserAgent)
 	req.Header.Set("Content-Type", "application/json;charset=utf-8")
 	req.Header.Set("x-csrf-token", s.csrfToken)
@@ -117,7 +119,10 @@ func (s *Session) smsCheckCodeImpl(ctx context.Context, code, phone, loginDomain
 	postBody, _ := json.Marshal(data)
 
 	u := s.baseURL + "/passport/v1/auth/smsCheckCode"
-	req, _ := http.NewRequestWithContext(ctx, "POST", u+"?"+WithSharedParams(nil).Encode(), bytes.NewReader(postBody))
+	req, err := newRequest(ctx, "POST", u+"?"+WithSharedParams(nil).Encode(), bytes.NewReader(postBody))
+	if err != nil {
+		return 0, err
+	}
 	req.Header.Set("User-Agent", UserAgent)
 	req.Header.Set("Content-Type", "application/json;charset=utf-8")
 	req.Header.Set("x-csrf-token", s.csrfToken)

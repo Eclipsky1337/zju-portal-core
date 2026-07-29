@@ -76,6 +76,7 @@ type Runtime struct {
 	serviceEvents  chan core.ServiceStatus
 	backendMu      sync.RWMutex
 	backend        *vpnBackend
+	runErr         error
 	resourceRoutes bool
 	routeAddresses []netip.Prefix
 	closed         bool
@@ -285,6 +286,12 @@ func (runtime *Runtime) ReplaceVPN(ctx context.Context, vpnClient client.Client,
 		_ = backend.Close(context.Background())
 		return core.WrapError(core.ErrorCodeOutboundUnavailable, "network runtime is closed", false, nil)
 	}
+	if runtime.runErr != nil {
+		runErr := runtime.runErr
+		runtime.backendMu.Unlock()
+		_ = backend.Close(context.Background())
+		return runErr
+	}
 	if runtime.resourceRoutes && !equalRoutePrefixes(runtime.routeAddresses, backend.routes) {
 		runtime.backendMu.Unlock()
 		_ = backend.Close(context.Background())
@@ -357,6 +364,11 @@ func (runtime *Runtime) Done() <-chan struct{} {
 
 func (runtime *Runtime) Err() error {
 	runtime.backendMu.RLock()
+	if runtime.runErr != nil {
+		err := runtime.runErr
+		runtime.backendMu.RUnlock()
+		return err
+	}
 	backend := runtime.backend
 	runtime.backendMu.RUnlock()
 	if backend == nil {
@@ -470,15 +482,33 @@ func (runtime *Runtime) monitorService(entry *serviceEntry) {
 	}
 	go func() {
 		<-provider.Done()
-		entry.markStopped(provider.Err())
+		err := provider.Err()
+		entry.markStopped(err)
 		runtime.backendMu.RLock()
 		closed := runtime.closed
 		runtime.backendMu.RUnlock()
 		if closed {
 			return
 		}
+		if entry.typeName == core.ServiceTypeTUN {
+			runtime.failTUN(err)
+		}
 		runtime.serviceEvents <- entry.status()
 	}()
+}
+
+func (runtime *Runtime) failTUN(err error) {
+	runtime.backendMu.Lock()
+	if runtime.closed || runtime.runErr != nil {
+		runtime.backendMu.Unlock()
+		return
+	}
+	runtime.runErr = core.WrapError(core.ErrorCodeTUNUnavailable, "TUN service stopped", false, err)
+	backend := runtime.backend
+	runtime.backendMu.Unlock()
+	if backend != nil {
+		backend.signalDone()
+	}
 }
 
 func (backend *vpnBackend) Done() <-chan struct{} { return backend.done }

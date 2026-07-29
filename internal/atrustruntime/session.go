@@ -171,6 +171,17 @@ func (s *Session) monitorRuntime(ctx context.Context, runtime *Runtime) {
 		if runtimeErr == nil {
 			return
 		}
+		if core.ErrorCodeOf(runtimeErr) == core.ErrorCodeTUNUnavailable {
+			s.mu.RLock()
+			network := s.network
+			s.mu.RUnlock()
+			if network != nil {
+				_ = network.Close(context.Background())
+			}
+			_ = runtime.CloseContext(context.Background())
+			s.failWith(core.ErrorCodeTUNUnavailable, "TUN service stopped", runtimeErr)
+			return
+		}
 		if s.config.DisableAutoReconnect {
 			_ = runtime.CloseContext(context.Background())
 			s.failWith(core.ErrorCodeSessionReconnectFailed, "VPN network runtime stopped", runtimeErr)

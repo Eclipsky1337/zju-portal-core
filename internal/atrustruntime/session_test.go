@@ -529,6 +529,36 @@ func TestMonitorRuntimeContinuesAfterVPNReplacement(t *testing.T) {
 	}
 }
 
+func TestMonitorRuntimeFailsWithoutReplacingVPNAfterTUNFailure(t *testing.T) {
+	outbound := newHealthOutboundStub()
+	network := wrapNetwork(outbound)
+	runtime := &Runtime{outbound: network}
+	session := newSession("session-monitor-tun-failure", Config{}, defaultDependencies())
+	session.state = core.SessionStateReady
+	session.runtime = runtime
+	session.network = network
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go session.monitorRuntime(ctx, runtime)
+
+	wantErr := errors.New("TUN read failed")
+	outbound.fail(core.WrapError(core.ErrorCodeTUNUnavailable, "TUN service stopped", false, wantErr))
+	events := collectEventsUntil(t, session.Events(), core.EventTypeSessionError)
+	event := findEvent(events, core.EventTypeSessionError)
+	if event == nil || event.Error == nil || event.Error.Code != core.ErrorCodeTUNUnavailable {
+		t.Fatalf("session error event = %#v", event)
+	}
+	if status := session.Status(); status.State != core.SessionStateFailed || status.LastError == nil || status.LastError.Code != core.ErrorCodeTUNUnavailable {
+		t.Fatalf("session status = %#v", status)
+	}
+	if !outbound.isClosed() {
+		t.Fatal("failed TUN network runtime was not closed")
+	}
+	if calls := outbound.replaceCalls.Load(); calls != 0 {
+		t.Fatalf("ReplaceVPN() calls = %d, want 0", calls)
+	}
+}
+
 func TestManagedSessionReportsStartFailure(t *testing.T) {
 	wantErr := errors.New("gateway rejected login")
 	deps := defaultDependencies()
@@ -976,6 +1006,12 @@ func (outbound *healthOutboundStub) fail(err error) {
 		outbound.closed = true
 	}
 	outbound.mu.Unlock()
+}
+
+func (outbound *healthOutboundStub) isClosed() bool {
+	outbound.mu.RLock()
+	defer outbound.mu.RUnlock()
+	return outbound.closed
 }
 
 func (outbound *healthOutboundStub) ReplaceVPN(context.Context, clientpkg.Client, networkruntime.Config) error {

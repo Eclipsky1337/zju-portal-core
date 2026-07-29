@@ -341,6 +341,40 @@ func TestRuntimeReportsUnexpectedServiceExit(t *testing.T) {
 	if len(statuses) != 1 || statuses[0].Running || statuses[0].LastError != wantErr.Error() {
 		t.Fatalf("service status = %#v", statuses)
 	}
+	select {
+	case <-runtime.Done():
+		t.Fatal("HTTP service failure stopped network runtime")
+	default:
+	}
+}
+
+func TestRuntimeStopsWhenTUNServiceExits(t *testing.T) {
+	wantErr := errors.New("TUN read failed")
+	tun := &serviceStub{address: testAddr("ZJU-Portal 172.19.0.1/30"), done: make(chan struct{}), runErr: wantErr}
+	runtime, err := New(context.Background(), &clientStub{}, Config{
+		TCPTunnelMode:    true,
+		DisableRemoteDNS: true,
+		TUNEnabled:       true,
+		newTUNService: func(TUNConfig, core.Outbound, core.ConnectionObserver) (managedService, error) {
+			return tun, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runtime.Close(context.Background())
+	close(tun.done)
+	select {
+	case <-runtime.Done():
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for network runtime failure")
+	}
+	if err := runtime.Err(); core.ErrorCodeOf(err) != core.ErrorCodeTUNUnavailable || !errors.Is(err, wantErr) {
+		t.Fatalf("runtime error = %v", err)
+	}
+	if err := runtime.ReplaceVPN(context.Background(), &clientStub{}, Config{TCPTunnelMode: true, DisableRemoteDNS: true}); core.ErrorCodeOf(err) != core.ErrorCodeTUNUnavailable {
+		t.Fatalf("ReplaceVPN() error = %v", err)
+	}
 }
 
 func TestRuntimeRollsBackServicesWhenStartupFails(t *testing.T) {

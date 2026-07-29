@@ -17,6 +17,7 @@ const sessionEventBuffer = 32
 const (
 	reconnectInitialDelay = time.Second
 	reconnectMaxDelay     = 30 * time.Second
+	sessionCleanupTimeout = 5 * time.Second
 )
 
 type Session struct {
@@ -40,6 +41,7 @@ type Session struct {
 	startOnce   sync.Once
 	startErr    error
 	closeOnce   sync.Once
+	closeDone   chan struct{}
 	closeReport core.CleanupReport
 	closeErr    error
 	refreshMu   sync.Mutex
@@ -47,11 +49,12 @@ type Session struct {
 
 func newSession(id core.SessionID, config Config, deps dependencies) *Session {
 	return &Session{
-		id:     id,
-		config: config,
-		deps:   deps,
-		state:  core.SessionStateIdle,
-		events: make(chan core.Event, sessionEventBuffer),
+		id:        id,
+		config:    config,
+		deps:      deps,
+		state:     core.SessionStateIdle,
+		events:    make(chan core.Event, sessionEventBuffer),
+		closeDone: make(chan struct{}),
 	}
 }
 
@@ -430,9 +433,19 @@ func (s *Session) failWith(code core.ErrorCode, message string, err error) {
 
 func (s *Session) Close(ctx context.Context) (core.CleanupReport, error) {
 	s.closeOnce.Do(func() {
-		s.closeReport, s.closeErr = s.close(ctx)
+		go func() {
+			cleanupCtx, cancel := context.WithTimeout(context.Background(), sessionCleanupTimeout)
+			defer cancel()
+			s.closeReport, s.closeErr = s.close(cleanupCtx)
+			close(s.closeDone)
+		}()
 	})
-	return s.closeReport, s.closeErr
+	select {
+	case <-s.closeDone:
+		return s.closeReport, s.closeErr
+	case <-ctx.Done():
+		return core.CleanupReport{}, core.WrapError(core.ErrorCodeSessionCloseFailed, "wait for session cleanup", false, ctx.Err())
+	}
 }
 
 func (s *Session) close(ctx context.Context) (core.CleanupReport, error) {

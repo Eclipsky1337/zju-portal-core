@@ -863,7 +863,6 @@ func TestManagedSessionReportsCleanupTimeout(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	report, err := session.Close(ctx)
 	cancel()
-	close(release)
 
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("Close() error = %v", err)
@@ -871,11 +870,19 @@ func TestManagedSessionReportsCleanupTimeout(t *testing.T) {
 	if code := core.ErrorCodeOf(err); code != core.ErrorCodeSessionCloseFailed {
 		t.Fatalf("Close() error code = %q", code)
 	}
-	if !report.HasErrors() {
-		t.Fatalf("cleanup report = %#v", report)
+	if report.StartedAt.IsZero() == false {
+		t.Fatalf("incomplete cleanup report = %#v", report)
+	}
+	close(release)
+	completed, err := session.Close(context.Background())
+	if err != nil {
+		t.Fatalf("second Close() error = %v", err)
+	}
+	if completed.HasErrors() || completed.CompletedAt.IsZero() {
+		t.Fatalf("completed cleanup report = %#v", completed)
 	}
 	if status := session.Status(); status.State != core.SessionStateStopped {
-		t.Fatalf("status after timed out close = %#v", status)
+		t.Fatalf("status after completed close = %#v", status)
 	}
 }
 

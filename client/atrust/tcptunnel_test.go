@@ -118,6 +118,13 @@ func TestWaitForTCPConnectRejectsMalformedResponse(t *testing.T) {
 	}
 }
 
+func TestValidateTCPProtocolResponseRejectsInvalidSID(t *testing.T) {
+	err := validateTCPProtocolResponse("invalid SID")
+	if err == nil || !strings.Contains(err.Error(), "authentication failed: invalid SID") {
+		t.Fatalf("validateTCPProtocolResponse() error = %v", err)
+	}
+}
+
 func TestEstablishTCPConnectionCanSkipWait(t *testing.T) {
 	clientConn, serverConn := net.Pipe()
 	defer clientConn.Close()

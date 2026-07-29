@@ -40,6 +40,16 @@ func readTCPProtocolResponse(reader *bufio.Reader) (string, error) {
 	return string(data), nil
 }
 
+func validateTCPProtocolResponse(response string) error {
+	if strings.Contains(response, "OK") {
+		return nil
+	}
+	if strings.Contains(response, "invalid SID") {
+		return fmt.Errorf("tcp tunnel authentication failed: invalid SID")
+	}
+	return fmt.Errorf("tcp tunnel setup failed: %s", response)
+}
+
 func readTCPConnectStatus(reader *bufio.Reader) (byte, error) {
 	header := make([]byte, 4)
 	if _, err := io.ReadFull(reader, header); err != nil {
@@ -96,8 +106,8 @@ func waitForTCPConnect(reader *bufio.Reader) error {
 		}
 		log.DebugPrint("Received protocol response:")
 		log.DebugDumpHex([]byte(response))
-		if !strings.Contains(response, "OK") {
-			return fmt.Errorf("tcp tunnel setup failed: %s", response)
+		if err := validateTCPProtocolResponse(response); err != nil {
+			return err
 		}
 		break
 	}
@@ -227,15 +237,11 @@ func (c *tcpTunnelConn) Read(b []byte) (int, error) {
 			log.DebugPrint("Received protocol response:")
 			log.DebugDumpHex(data)
 
-			if !strings.Contains(string(data), "OK") {
-				log.Printf("Failed to connect to the server: %s", string(data))
+			response := string(data)
+			if err := validateTCPProtocolResponse(response); err != nil {
+				log.Printf("Failed to connect to the server: %s", response)
 				_ = c.tlsConn.Close()
-
-				if strings.Contains(string(data), "invalid SID") {
-					panic(err)
-				}
-
-				return 0, fmt.Errorf("failed to connect to the server")
+				return 0, err
 			}
 		}
 	}

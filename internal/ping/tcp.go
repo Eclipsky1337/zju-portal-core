@@ -30,8 +30,6 @@ func (tcping *TCPing) SetContext(ctx context.Context) {
 	tcping.ctx = ctx
 }
 
-var _ Pinger = (*TCPing)(nil)
-
 // NewTCPing return a new TCPing
 func NewTCPing() *TCPing {
 	tcping := TCPing{

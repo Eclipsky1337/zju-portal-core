@@ -10,14 +10,8 @@ import (
 	"github.com/Eclipsky1337/zju-portal-core/core"
 	"github.com/Eclipsky1337/zju-portal-core/internal/dnsmessage"
 	"github.com/Eclipsky1337/zju-portal-core/log"
-	"github.com/Eclipsky1337/zju-portal-core/resolve"
 	"github.com/miekg/dns"
 )
-
-type DNSServer struct {
-	resolver DNSResolver
-	localDNS []net.IP
-}
 
 type DNSResolver interface {
 	Resolve(context.Context, string) (context.Context, net.IP, error)
@@ -45,36 +39,15 @@ type ManagedDNSService struct {
 
 var _ core.Component = (*ManagedDNSService)(nil)
 
-func (d DNSServer) serveDNSRequest(w dns.ResponseWriter, r *dns.Msg) {
-	_ = w.WriteMsg(dnsmessage.Handler{Resolver: d.resolver}.Handle(context.Background(), r))
-}
-
-func (d DNSServer) HandleDnsMsg(ctx context.Context, requestMsg *dns.Msg) (*dns.Msg, error) {
-	return dnsmessage.Handler{Resolver: d.resolver}.Handle(ctx, requestMsg), nil
-}
-
-func (d DNSServer) CheckDnsHijack(dstIP net.IP) bool {
-	for _, ip := range d.localDNS {
-		if ip.Equal(dstIP) {
-			return false
-		}
-	}
-	return true
-}
-
-func NewDnsServer(resolver *resolve.Resolver, dnsServers []string) DNSServer {
-	netIPs := make([]net.IP, 0, len(dnsServers))
-	for _, dnsServer := range dnsServers {
-		if address := net.ParseIP(dnsServer); address != nil {
-			netIPs = append(netIPs, address)
-		}
-	}
-	return DNSServer{resolver: resolver, localDNS: netIPs}
-}
-
 func NewManagedDNSService(bindAddr string, resolver DNSResolver) *ManagedDNSService {
-	dnsServer := DNSServer{resolver: resolver}
-	return &ManagedDNSService{bindAddr: bindAddr, handler: dns.HandlerFunc(dnsServer.serveDNSRequest), runDone: make(chan struct{})}
+	handler := dnsmessage.Handler{Resolver: resolver}
+	return &ManagedDNSService{
+		bindAddr: bindAddr,
+		handler: dns.HandlerFunc(func(writer dns.ResponseWriter, request *dns.Msg) {
+			_ = writer.WriteMsg(handler.Handle(context.Background(), request))
+		}),
+		runDone: make(chan struct{}),
+	}
 }
 
 func (service *ManagedDNSService) Start(ctx context.Context) error {

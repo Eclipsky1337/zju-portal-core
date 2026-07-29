@@ -7,8 +7,6 @@ import (
 	"sync"
 
 	"github.com/Eclipsky1337/zju-portal-core/client"
-	"github.com/Eclipsky1337/zju-portal-core/internal/ippool"
-	"github.com/Eclipsky1337/zju-portal-core/internal/zcdns"
 	"github.com/Eclipsky1337/zju-portal-core/log"
 	"gvisor.dev/gvisor/pkg/buffer"
 	"gvisor.dev/gvisor/pkg/tcpip"
@@ -21,8 +19,6 @@ import (
 
 type Stack struct {
 	gvisorStack *stack.Stack
-	resolve     zcdns.LocalServer
-	ipPool      *ippool.IPPool[client.DomainResource]
 
 	endpoint *Endpoint
 
@@ -162,14 +158,6 @@ func NewStack(client client.Client) (*Stack, error) {
 	s.gvisorStack.AddRoute(tcpip.Route{Destination: header.IPv4EmptySubnet, NIC: NICID})
 
 	return s, nil
-}
-
-func (s *Stack) SetupResolve(r zcdns.LocalServer) {
-	s.resolve = r
-}
-
-func (s *Stack) SetupIPPool(ipPool *ippool.IPPool[client.DomainResource]) {
-	s.ipPool = ipPool
 }
 
 func (s *Stack) Run() {

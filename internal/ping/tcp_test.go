@@ -11,7 +11,6 @@ func TestTCPingStopsWhenContextIsCanceled(t *testing.T) {
 	tcping := NewTCPing()
 	tcping.SetContext(ctx)
 	tcping.SetTarget(&Target{
-		Protocol: TCP,
 		Host:     "127.0.0.1",
 		Port:     1,
 		Counter:  1,
@@ -31,7 +30,6 @@ func TestTCPingStopsWhenContextIsCanceled(t *testing.T) {
 func TestTCPingStopIsIdempotent(t *testing.T) {
 	tcping := NewTCPing()
 	tcping.SetTarget(&Target{
-		Protocol: TCP,
 		Host:     "127.0.0.1",
 		Port:     1,
 		Counter:  1,

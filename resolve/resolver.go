@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/Eclipsky1337/zju-portal-core/client"
-	"github.com/Eclipsky1337/zju-portal-core/internal/ippool"
 	"github.com/Eclipsky1337/zju-portal-core/log"
 	"github.com/patrickmn/go-cache"
 )
@@ -28,8 +27,6 @@ type Resolver struct {
 
 	dnsCache *cache.Cache
 
-	IPPool *ippool.IPPool[client.DomainResource]
-
 	timer  *time.Timer
 	useTCP bool
 	// check to use tcp resolver or udp resolver
@@ -45,7 +42,6 @@ type Resolver struct {
 type contextKey string
 
 var (
-	ContextKeyFakeIP         = contextKey("FAKE_IP")
 	ContextKeyResolveHost    = contextKey("RESOLVE_HOST")
 	ContextKeyDomainResource = contextKey("DOMAIN_RESOURCE")
 )
@@ -73,21 +69,7 @@ func (r *Resolver) Resolve(ctx context.Context, host string) (resCtx context.Con
 	if r.dnsResource != nil {
 		if ip, found := r.dnsResource[host]; found {
 			log.Printf("%s -> %s", host, ip.String())
-			if domainResourceFound {
-				err := r.IPPool.SetIPDomain(ip, host, domainResource)
-				if err != nil {
-					log.DebugPrintf("Set IP err: %s", err)
-				}
-			}
 			return ctx, ip, nil
-		}
-
-		if fakeIPValue := ctx.Value(ContextKeyFakeIP); fakeIPValue != nil {
-			if domainResourceFound {
-				ip := r.IPPool.GenerateIP(host, domainResource)
-				log.Printf("%s -> %s (Fake IP)", host, ip.String())
-				return ctx, ip, nil
-			}
 		}
 	}
 
@@ -142,9 +124,10 @@ func (r *Resolver) Resolve(ctx context.Context, host string) (resCtx context.Con
 		} else {
 			// waiting dns query for remoteResolve finish
 			resolveLock.Lock()
+			cachedIP, found := r.getDNSCache(host)
 			resolveLock.Unlock()
 			// if host handled by remoteResolver, it must exist in DNSCache
-			if cachedIP, found := r.getDNSCache(host); found {
+			if found {
 				return ctx, cachedIP, nil
 			}
 			return r.ResolveWithSecondaryDNS(ctx, host)
@@ -294,11 +277,5 @@ func NewResolverWithSecondaryDialer(stack resolverStack, remoteDNSServer, second
 			PreferGo: true,
 		}
 	}
-	var err error
-	resolver.IPPool, err = ippool.NewIPPool[client.DomainResource]("198.18.0.0/16")
-	if err != nil {
-		return nil, err
-	}
-
 	return resolver, nil
 }

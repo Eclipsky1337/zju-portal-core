@@ -9,7 +9,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Eclipsky1337/zju-portal-core/dial"
 	"github.com/miekg/dns"
 )
 
@@ -219,6 +218,12 @@ type addressStub string
 func (address addressStub) Network() string { return "tcp" }
 func (address addressStub) String() string  { return string(address) }
 
-func testDialer() *dial.Dialer {
-	return dial.NewDialer(nil, nil, nil, false, "")
+type testContextDialer struct{}
+
+func (testContextDialer) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
+	return (&net.Dialer{}).DialContext(ctx, network, address)
+}
+
+func testDialer() testContextDialer {
+	return testContextDialer{}
 }

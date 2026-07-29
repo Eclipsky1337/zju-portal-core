@@ -11,7 +11,7 @@ import (
 
 var builtinZJURoute = netip.MustParsePrefix("10.0.0.0/8")
 
-func buildResourceRoutePrefixes(ipResources []client.IPResource, dnsRecords map[string]net.IP, fakeIPRange string) ([]netip.Prefix, error) {
+func buildResourceRoutePrefixes(ipResources []client.IPResource, dnsRecords map[string]net.IP, excludedIPs []net.IP, fakeIPRange string) ([]netip.Prefix, error) {
 	var builder netaddr.IPSetBuilder
 	builtin, _ := netaddr.ParseIPPrefix(builtinZJURoute.String())
 	builder.AddPrefix(builtin)
@@ -36,6 +36,12 @@ func buildResourceRoutePrefixes(ipResources []client.IPResource, dnsRecords map[
 			return nil, fmt.Errorf("parse TUN fake IP route %q", fakeIPRange)
 		}
 		builder.AddPrefix(prefix)
+	}
+	for _, address := range excludedIPs {
+		ip, ok := netaddr.FromStdIP(address)
+		if ok && ip.Is4() {
+			builder.Remove(ip)
+		}
 	}
 
 	set, err := builder.IPSet()

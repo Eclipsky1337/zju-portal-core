@@ -5,7 +5,6 @@ import (
 	"testing"
 
 	clientpkg "github.com/Eclipsky1337/zju-portal-core/client"
-	"inet.af/netaddr"
 )
 
 func TestParseResourcePreservesResourceAndNodeBehavior(t *testing.T) {
@@ -93,13 +92,9 @@ func TestParseResourcePreservesResourceAndNodeBehavior(t *testing.T) {
 		}
 	}
 
-	if client.ipSet.Contains(netaddr.MustParseIP("10.0.0.10")) {
-		t.Fatal("IP set contains tunnel node address; expected circular-route exclusion")
-	}
-	for _, address := range []string{"10.1.1.1", "10.2.0.15", "10.3.0.5"} {
-		if !client.ipSet.Contains(netaddr.MustParseIP(address)) {
-			t.Fatalf("IP set does not contain %s", address)
-		}
+	excluded := client.RouteExcludedIPs()
+	if len(excluded) != 1 || !excluded[0].Equal(net.ParseIP("10.0.0.10")) {
+		t.Fatalf("RouteExcludedIPs() = %v, want [10.0.0.10]", excluded)
 	}
 }
 

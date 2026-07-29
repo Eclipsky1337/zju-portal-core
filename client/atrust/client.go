@@ -19,7 +19,6 @@ import (
 	"github.com/Eclipsky1337/zju-portal-core/core"
 	"github.com/Eclipsky1337/zju-portal-core/internal/underlay"
 	"github.com/Eclipsky1337/zju-portal-core/log"
-	"inet.af/netaddr"
 )
 
 type Client struct {
@@ -33,7 +32,6 @@ type Client struct {
 	serverAddress   string
 	ipResources     []client.IPResource
 	domainResources map[string]client.DomainResource
-	ipSet           *netaddr.IPSet
 	dnsResource     map[string]net.IP
 	dnsServer       string
 
@@ -104,20 +102,28 @@ func (c *Client) IP() (net.IP, error) {
 	return c.ip.To4(), nil
 }
 
-func (c *Client) IPSet() (*netaddr.IPSet, error) {
-	if c.ipSet == nil {
-		return nil, errors.New("IP set not available")
-	}
-
-	return c.ipSet, nil
-}
-
 func (c *Client) IPResources() ([]client.IPResource, error) {
 	if c.ipResources == nil {
 		return nil, errors.New("IP resources not available")
 	}
 
 	return c.ipResources, nil
+}
+
+func (c *Client) RouteExcludedIPs() []net.IP {
+	var excluded []net.IP
+	for _, addresses := range c.NodeGroups {
+		for _, address := range addresses {
+			host, _, err := net.SplitHostPort(address)
+			if err != nil {
+				continue
+			}
+			if ip := net.ParseIP(host).To4(); ip != nil {
+				excluded = append(excluded, append(net.IP(nil), ip...))
+			}
+		}
+	}
+	return excluded
 }
 
 func (c *Client) DomainResources() (map[string]client.DomainResource, error) {

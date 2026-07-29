@@ -5,7 +5,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/hmac"
-	"crypto/rand"
 	"crypto/sha256"
 	"crypto/tls"
 	"encoding/binary"
@@ -286,14 +285,6 @@ func (c *tcpTunnelConn) SetReadDeadline(t time.Time) error {
 
 func (c *tcpTunnelConn) SetWriteDeadline(t time.Time) error {
 	return c.tlsConn.SetWriteDeadline(t)
-}
-
-func randUint64() string {
-	var b [8]byte
-	if _, err := rand.Read(b[:]); err != nil {
-		panic(err)
-	}
-	return fmt.Sprint(binary.BigEndian.Uint64(b[:]))
 }
 
 func calcXRequestSig(key []byte, data []byte) string {

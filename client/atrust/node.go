@@ -32,7 +32,6 @@ func getBestNodes(ctx context.Context, nodeGroups map[string][]string, dialConte
 				tcping.SetContext(ctx)
 				tcping.SetDialContext(dialContext)
 				target := ping.Target{
-					Protocol: ping.TCP,
 					Host:     host,
 					Port:     port,
 					Counter:  pingNum,

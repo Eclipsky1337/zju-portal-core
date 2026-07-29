@@ -10,7 +10,6 @@ import (
 
 	clientpkg "github.com/Eclipsky1337/zju-portal-core/client"
 	"github.com/Eclipsky1337/zju-portal-core/core"
-	"inet.af/netaddr"
 )
 
 func TestSnapshotResourcesConvertsClientResources(t *testing.T) {
@@ -81,10 +80,6 @@ func (client resourceClientStub) IP() (net.IP, error) {
 		return nil, clientpkg.ErrResourceNotFound
 	}
 	return client.ip, nil
-}
-
-func (client resourceClientStub) IPSet() (*netaddr.IPSet, error) {
-	return nil, clientpkg.ErrResourceNotFound
 }
 
 func (client resourceClientStub) IPResources() ([]clientpkg.IPResource, error) {

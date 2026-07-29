@@ -195,7 +195,7 @@ func newVPNBackend(ctx context.Context, vpnClient client.Client, config Config) 
 		if config.TUNFakeIP {
 			fakeIPRange = config.TUNFakeIPRange
 		}
-		routes, err = buildResourceRoutePrefixes(ipResources, dnsRecords, fakeIPRange)
+		routes, err = buildResourceRoutePrefixes(ipResources, dnsRecords, routeExcludedIPs(vpnClient), fakeIPRange)
 		if err != nil {
 			return nil, err
 		}
@@ -258,8 +258,6 @@ func newVPNBackend(ctx context.Context, vpnClient client.Client, config Config) 
 			return nil, err
 		}
 	}
-	vpnStack.SetupIPPool(resolver.IPPool)
-
 	runCtx, cancel := context.WithCancel(ctx)
 	backend := &vpnBackend{
 		outbound: dial.NewVPNOutbound(vpnStack, resolver, ipResources),
@@ -580,6 +578,18 @@ func optionalIPResources(vpnClient client.Client) ([]client.IPResource, error) {
 		return nil, nil
 	}
 	return resources, err
+}
+
+type routeExclusionProvider interface {
+	RouteExcludedIPs() []net.IP
+}
+
+func routeExcludedIPs(vpnClient client.Client) []net.IP {
+	provider, ok := vpnClient.(routeExclusionProvider)
+	if !ok {
+		return nil
+	}
+	return provider.RouteExcludedIPs()
 }
 
 func optionalDomainResources(vpnClient client.Client) (map[string]client.DomainResource, error) {

@@ -2,6 +2,7 @@ package atrust
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -42,7 +43,10 @@ func NewL3Tunnel(aTrustClient *Client) (*L3Tunnel, error) {
 	}
 
 	ipResources, err := aTrustClient.IPResources()
-	if ipResources == nil {
+	if err != nil && !errors.Is(err, client.ErrResourceNotFound) {
+		return nil, fmt.Errorf("failed to get IP resources: %w", err)
+	}
+	if errors.Is(err, client.ErrResourceNotFound) || ipResources == nil {
 		ipResources = []client.IPResource{}
 	}
 	t.ipResources = ipResources

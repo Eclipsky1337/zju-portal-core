@@ -15,7 +15,6 @@ import (
 	"github.com/Eclipsky1337/zju-portal-core/dial"
 	"github.com/Eclipsky1337/zju-portal-core/service"
 	"github.com/things-go/go-socks5"
-	"inet.af/netaddr"
 )
 
 func TestGvisorRuntimeReportsTerminalRunError(t *testing.T) {
@@ -526,8 +525,6 @@ type clientStub struct {
 }
 
 func (*clientStub) IP() (net.IP, error) { return net.ParseIP("10.0.0.2"), nil }
-
-func (*clientStub) IPSet() (*netaddr.IPSet, error) { return nil, client.ErrResourceNotFound }
 
 func (client *clientStub) IPResources() ([]client.IPResource, error) {
 	return client.ipResources, nil

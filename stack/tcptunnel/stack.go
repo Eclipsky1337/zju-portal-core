@@ -6,14 +6,10 @@ import (
 	"net"
 
 	"github.com/Eclipsky1337/zju-portal-core/client"
-	"github.com/Eclipsky1337/zju-portal-core/internal/ippool"
-	"github.com/Eclipsky1337/zju-portal-core/internal/zcdns"
 )
 
 type Stack struct {
-	client  client.Client
-	resolve zcdns.LocalServer
-	ipPool  *ippool.IPPool[client.DomainResource]
+	client client.Client
 }
 
 func (s *Stack) Run() {}
@@ -31,14 +27,6 @@ func NewStack(client client.Client) (*Stack, error) {
 		client: client,
 	}
 	return s, nil
-}
-
-func (s *Stack) SetupResolve(r zcdns.LocalServer) {
-	s.resolve = r
-}
-
-func (s *Stack) SetupIPPool(ipPool *ippool.IPPool[client.DomainResource]) {
-	s.ipPool = ipPool
 }
 
 func (s *Stack) DialTCP(ctx context.Context, addr *net.TCPAddr) (net.Conn, error) {

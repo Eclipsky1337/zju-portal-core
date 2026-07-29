@@ -17,7 +17,7 @@ func TestBuildResourceRoutePrefixesMergesResourcesDNSAndBuiltinRoutes(t *testing
 	}, map[string]net.IP{
 		"static.example.edu": net.ParseIP("203.0.113.9"),
 		"ipv6.example.edu":   net.ParseIP("2001:db8::1"),
-	}, "198.18.0.0/16")
+	}, nil, "198.18.0.0/16")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -33,8 +33,28 @@ func TestBuildResourceRoutePrefixesMergesResourcesDNSAndBuiltinRoutes(t *testing
 }
 
 func TestBuildResourceRoutePrefixesRejectsInvalidFakeIPRange(t *testing.T) {
-	if _, err := buildResourceRoutePrefixes(nil, nil, "invalid"); err == nil {
+	if _, err := buildResourceRoutePrefixes(nil, nil, nil, "invalid"); err == nil {
 		t.Fatal("invalid fake IP range was accepted")
+	}
+}
+
+func TestBuildResourceRoutePrefixesExcludesTunnelNodes(t *testing.T) {
+	routes, err := buildResourceRoutePrefixes([]client.IPResource{
+		{IPMin: net.ParseIP("192.0.2.0"), IPMax: net.ParseIP("192.0.2.255")},
+	}, nil, []net.IP{net.ParseIP("10.0.0.10"), net.ParseIP("192.0.2.10")}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, address := range []string{"10.0.0.10", "192.0.2.10"} {
+		if routePrefixesContain(routes, netip.MustParseAddr(address)) {
+			t.Fatalf("routes %v contain excluded tunnel node %s", routes, address)
+		}
+	}
+	for _, address := range []string{"10.0.0.11", "192.0.2.11"} {
+		if !routePrefixesContain(routes, netip.MustParseAddr(address)) {
+			t.Fatalf("routes %v do not contain adjacent resource %s", routes, address)
+		}
 	}
 }
 

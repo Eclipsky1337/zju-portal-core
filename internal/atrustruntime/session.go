@@ -120,7 +120,17 @@ func (s *Session) start(ctx context.Context) error {
 	}
 
 	network := runtime.DetachOutbound()
-	resources, _ := s.deps.readResources(runtime.Client())
+	resources, err := s.deps.readResources(runtime.Client())
+	if err != nil {
+		if network != nil {
+			_ = network.Close(context.Background())
+		}
+		_ = runtime.CloseContext(context.Background())
+		cancel()
+		resourceErr := core.WrapError(core.ErrorCodeResourcesUnavailable, "read initial resource snapshot", false, err)
+		s.failWith(core.ErrorCodeResourcesUnavailable, "read initial resource snapshot", resourceErr)
+		return resourceErr
+	}
 	resumeState, _ := runtime.ResumeState()
 	s.mu.Lock()
 	s.runtime = runtime

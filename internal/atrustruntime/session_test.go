@@ -466,6 +466,37 @@ func TestManagedSessionRefreshResourceReadFailurePreservesResourcesAndNetwork(t 
 	}
 }
 
+func TestManagedSessionFailsWhenInitialResourceSnapshotCannotBeRead(t *testing.T) {
+	wantErr := errors.New("resource snapshot failed")
+	deps := successfulSessionDependencies()
+	deps.readResources = func(clientpkg.Client) (core.Resources, error) {
+		return core.Resources{}, wantErr
+	}
+	var clientClosed atomic.Bool
+	deps.closeClient = func(*atrustclient.Client) {
+		clientClosed.Store(true)
+	}
+	outbound := newHealthOutboundStub()
+	deps.setupNetwork = func(context.Context, clientpkg.Client, Config) (core.Outbound, error) {
+		return outbound, nil
+	}
+	session := newSession("session-initial-resource-failure", Config{SetupNetwork: true}, deps)
+
+	err := session.Start(context.Background())
+	if !errors.Is(err, wantErr) || core.ErrorCodeOf(err) != core.ErrorCodeResourcesUnavailable {
+		t.Fatalf("Start() error = %v", err)
+	}
+	if status := session.Status(); status.State != core.SessionStateFailed || status.LastError == nil || status.LastError.Code != core.ErrorCodeResourcesUnavailable {
+		t.Fatalf("session status = %#v", status)
+	}
+	if !outbound.isClosed() {
+		t.Fatal("network runtime was not closed")
+	}
+	if !clientClosed.Load() {
+		t.Fatal("aTrust client was not closed")
+	}
+}
+
 func TestManagedSessionRefreshNetworkFailurePreservesResourcesAndClient(t *testing.T) {
 	wantErr := errors.New("VPN backend replacement failed")
 	deps := successfulSessionDependencies()
@@ -616,6 +647,7 @@ func TestManagedSessionReconnectsFailedRuntimeWithLatestResumeState(t *testing.T
 	firstClientData := []byte(`{"device_id":"device-1"}`)
 	secondClientData := []byte(`{"device_id":"device-2"}`)
 	deps := defaultDependencies()
+	deps.readResources = successfulSessionDependencies().readResources
 	var setupCalls atomic.Int32
 	deps.setup = func(_ context.Context, _ *atrustclient.Client, _ Config, clientData, _ []byte, stageHandler func(atrustclient.SetupStage)) ([]byte, error) {
 		call := setupCalls.Add(1)
@@ -683,6 +715,7 @@ func TestManagedSessionReconnectsFailedRuntimeWithLatestResumeState(t *testing.T
 func TestManagedSessionRetriesReconnectAfterFailure(t *testing.T) {
 	clientData := []byte(`{"device_id":"device-1"}`)
 	deps := defaultDependencies()
+	deps.readResources = successfulSessionDependencies().readResources
 	var setupCalls atomic.Int32
 	deps.setup = func(_ context.Context, _ *atrustclient.Client, _ Config, _ []byte, _ []byte, stageHandler func(atrustclient.SetupStage)) ([]byte, error) {
 		call := setupCalls.Add(1)
@@ -888,6 +921,13 @@ func TestManagedSessionReportsCleanupTimeout(t *testing.T) {
 
 func successfulSessionDependencies() dependencies {
 	deps := defaultDependencies()
+	deps.readResources = func(clientpkg.Client) (core.Resources, error) {
+		return core.Resources{
+			IPResources:     []core.IPResource{},
+			DomainResources: map[string]core.DomainResource{},
+			DNSRecords:      map[string]string{},
+		}, nil
+	}
 	deps.setup = func(_ context.Context, _ *atrustclient.Client, _ Config, _, _ []byte, stageHandler func(atrustclient.SetupStage)) ([]byte, error) {
 		if stageHandler != nil {
 			for _, stage := range []atrustclient.SetupStage{

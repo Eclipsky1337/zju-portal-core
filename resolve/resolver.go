@@ -86,7 +86,10 @@ func (r *Resolver) Resolve(ctx context.Context, host string) (resCtx context.Con
 				if resolved.Err != nil {
 					return ctx, nil, resolved.Err
 				}
-				address := resolved.Val.(net.IP)
+				address, ok := resolved.Val.(net.IP)
+				if !ok || address == nil {
+					return ctx, nil, errors.New("DNS resolver returned an invalid address result")
+				}
 				return ctx, address, nil
 			}
 		}

@@ -2,6 +2,7 @@ package dial
 
 import (
 	"context"
+	"errors"
 	"net"
 	"sync/atomic"
 	"testing"
@@ -22,6 +23,25 @@ func TestInternetDirectOutboundUsesProvidedDialer(t *testing.T) {
 	_ = conn.Close()
 	if dialer.calls.Load() != 1 {
 		t.Fatalf("dial calls = %d", dialer.calls.Load())
+	}
+}
+
+func TestInternetOutboundClassifiesInvalidConfiguration(t *testing.T) {
+	for _, config := range []core.InternetOutboundConfig{
+		{Type: core.InternetOutboundSOCKS5},
+		{Type: "invalid"},
+	} {
+		if _, err := NewInternetOutbound(config); core.ErrorCodeOf(err) != core.ErrorCodeConfigInvalid {
+			t.Fatalf("NewInternetOutbound(%#v) error = %v", config, err)
+		}
+	}
+}
+
+func TestSOCKS5OutboundClassifiesUnsupportedUDP(t *testing.T) {
+	outbound := &socks5Outbound{}
+	_, err := outbound.DialContext(context.Background(), "udp", "192.0.2.1:53")
+	if core.ErrorCodeOf(err) != core.ErrorCodeOutboundUnavailable || !errors.Is(err, ErrSOCKS5UDPUnsupported) {
+		t.Fatalf("DialContext() error = %v", err)
 	}
 }
 

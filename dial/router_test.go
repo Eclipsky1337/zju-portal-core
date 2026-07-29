@@ -94,8 +94,14 @@ func TestRouterModeCanBeChanged(t *testing.T) {
 	if err != nil || previous != core.RoutingModeRule || router.Mode() != core.RoutingModeGlobal {
 		t.Fatalf("SetMode() = %q, %v; mode = %q", previous, err, router.Mode())
 	}
-	if _, err := router.SetMode("invalid"); err == nil || router.Mode() != core.RoutingModeGlobal {
+	if _, err := router.SetMode("invalid"); core.ErrorCodeOf(err) != core.ErrorCodeInvalidRequest || router.Mode() != core.RoutingModeGlobal {
 		t.Fatalf("invalid SetMode() error = %v; mode = %q", err, router.Mode())
+	}
+}
+
+func TestNewRouterClassifiesInvalidMode(t *testing.T) {
+	if _, err := NewRouter(&routerOutboundStub{}, &routerOutboundStub{}, "invalid"); core.ErrorCodeOf(err) != core.ErrorCodeConfigInvalid {
+		t.Fatalf("NewRouter() error = %v", err)
 	}
 }
 

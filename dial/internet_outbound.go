@@ -47,7 +47,7 @@ func NewInternetOutboundWithDialer(config core.InternetOutboundConfig, baseDiale
 		return &directOutbound{dialer: baseDialer}, nil
 	case core.InternetOutboundSOCKS5:
 		if config.Address == "" {
-			return nil, fmt.Errorf("SOCKS5 internet outbound address is required")
+			return nil, core.WrapError(core.ErrorCodeConfigInvalid, "SOCKS5 internet outbound address is required", false, nil)
 		}
 		var auth *proxy.Auth
 		if config.Username != "" || config.Password != "" {
@@ -61,7 +61,7 @@ func NewInternetOutboundWithDialer(config core.InternetOutboundConfig, baseDiale
 	case core.InternetOutboundReject:
 		return rejectOutbound{}, nil
 	default:
-		return nil, fmt.Errorf("unsupported internet outbound type %q", config.Type)
+		return nil, core.WrapError(core.ErrorCodeConfigInvalid, fmt.Sprintf("unsupported internet outbound type %q", config.Type), false, nil)
 	}
 }
 
@@ -83,7 +83,7 @@ type socks5Outbound struct {
 
 func (outbound *socks5Outbound) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
 	if network != "tcp" && network != "tcp4" {
-		return nil, fmt.Errorf("%w: %s", ErrSOCKS5UDPUnsupported, network)
+		return nil, core.WrapError(core.ErrorCodeOutboundUnavailable, "SOCKS5 internet outbound only supports TCP", false, fmt.Errorf("%w: %s", ErrSOCKS5UDPUnsupported, network))
 	}
 	if dialer, ok := outbound.dialer.(proxy.ContextDialer); ok {
 		return dialer.DialContext(ctx, "tcp", address)

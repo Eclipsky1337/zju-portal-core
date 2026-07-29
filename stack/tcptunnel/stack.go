@@ -2,10 +2,10 @@ package tcptunnel
 
 import (
 	"context"
-	"fmt"
 	"net"
 
 	"github.com/Eclipsky1337/zju-portal-core/client"
+	"github.com/Eclipsky1337/zju-portal-core/core"
 )
 
 type Stack struct {
@@ -34,9 +34,9 @@ func (s *Stack) DialTCP(ctx context.Context, addr *net.TCPAddr) (net.Conn, error
 		return s.client.DialTCP(ctx, addr)
 	}
 
-	return nil, fmt.Errorf("not implemented")
+	return nil, core.WrapError(core.ErrorCodeOutboundUnavailable, "TCP tunnel is unavailable", false, nil)
 }
 
 func (s *Stack) DialUDP(ctx context.Context, addr *net.UDPAddr) (net.Conn, error) {
-	return nil, fmt.Errorf("not implemented")
+	return nil, core.WrapError(core.ErrorCodeOutboundUnavailable, "TCP tunnel stack does not support UDP", false, nil)
 }

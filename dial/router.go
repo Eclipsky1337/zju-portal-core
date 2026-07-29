@@ -39,7 +39,7 @@ func NewRouterWithDirect(vpn, internet, direct core.Outbound, mode core.RoutingM
 		mode = core.RoutingModeRule
 	}
 	if !mode.Valid() {
-		return nil, fmt.Errorf("invalid routing mode %q", mode)
+		return nil, core.WrapError(core.ErrorCodeConfigInvalid, fmt.Sprintf("invalid routing mode %q", mode), false, nil)
 	}
 	return &Router{vpn: vpn, internet: internet, direct: direct, mode: mode}, nil
 }
@@ -86,7 +86,7 @@ func (router *Router) Mode() core.RoutingMode {
 
 func (router *Router) SetMode(mode core.RoutingMode) (core.RoutingMode, error) {
 	if !mode.Valid() {
-		return "", fmt.Errorf("invalid routing mode %q", mode)
+		return "", core.WrapError(core.ErrorCodeInvalidRequest, fmt.Sprintf("invalid routing mode %q", mode), false, nil)
 	}
 	router.modeMu.Lock()
 	previous := router.mode

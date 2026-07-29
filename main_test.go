@@ -1,0 +1,239 @@
+package main
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"io"
+	"net"
+	"net/http"
+	"os"
+	"path/filepath"
+	"reflect"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	controlv1 "github.com/Eclipsky1337/zju-portal-core/control/v1"
+	"github.com/Eclipsky1337/zju-portal-core/core"
+	zlog "github.com/Eclipsky1337/zju-portal-core/log"
+	coremanager "github.com/Eclipsky1337/zju-portal-core/manager"
+)
+
+func TestDaemonStdioReservesStdoutForJSONL(t *testing.T) {
+	defer zlog.SetOutput(os.Stdout)
+	input := strings.NewReader("{\"id\":1,\"method\":\"hello\",\"params\":{\"protocol_version\":1}}\n")
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if err := runDaemon(context.Background(), []string{"--stdio"}, input, &stdout, &stderr, func() core.Manager { return coremanager.New() }); err != nil {
+		t.Fatal(err)
+	}
+	decoder := json.NewDecoder(bytes.NewReader(stdout.Bytes()))
+	var response struct {
+		ID     int `json:"id"`
+		Result struct {
+			CoreVersion string `json:"core_version"`
+		} `json:"result"`
+	}
+	if err := decoder.Decode(&response); err != nil {
+		t.Fatalf("decode stdout: %v: %q", err, stdout.String())
+	}
+	if response.ID != 1 || response.Result.CoreVersion != coreV2Version {
+		t.Fatalf("response = %#v", response)
+	}
+	var extra any
+	if err := decoder.Decode(&extra); err != io.EOF {
+		t.Fatalf("extra stdout = %q", stdout.String())
+	}
+	zlog.Println("diagnostic output")
+	if strings.Contains(stdout.String(), "diagnostic output") || !strings.Contains(stderr.String(), "diagnostic output") {
+		t.Fatalf("stdout=%q stderr=%q", stdout.String(), stderr.String())
+	}
+}
+
+func TestDaemonRESTBootstrapWithoutConfig(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	address := listener.Addr().String()
+	if err := listener.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var stderr synchronizedBuffer
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- runDaemon(ctx, []string{"--rest", address}, strings.NewReader(""), io.Discard, &stderr, func() core.Manager { return coremanager.New() })
+	}()
+
+	client := &http.Client{Timeout: 500 * time.Millisecond}
+	var response *http.Response
+	var requestErr error
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		secret := restToken(stderr.String())
+		if secret == "" {
+			time.Sleep(10 * time.Millisecond)
+			continue
+		}
+		request, requestErr := http.NewRequest(http.MethodGet, "http://"+address+"/api/v1/hello", nil)
+		if requestErr != nil {
+			t.Fatal(requestErr)
+		}
+		request.Header.Set("Authorization", "Bearer "+secret)
+		response, requestErr = client.Do(request)
+		if requestErr == nil {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if response == nil {
+		t.Fatalf("request REST bootstrap: %v; stderr=%q", requestErr, stderr.String())
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("REST bootstrap status = %d", response.StatusCode)
+	}
+	var hello struct {
+		Result struct {
+			ProtocolVersion int `json:"protocol_version"`
+		} `json:"result"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&hello); err != nil {
+		t.Fatal(err)
+	}
+	if hello.Result.ProtocolVersion != controlv1.ProtocolVersion {
+		t.Fatalf("protocol version = %d", hello.Result.ProtocolVersion)
+	}
+
+	cancel()
+	if err := <-errCh; err != nil {
+		t.Fatal(err)
+	}
+}
+
+type synchronizedBuffer struct {
+	mu     sync.Mutex
+	buffer bytes.Buffer
+}
+
+func (buffer *synchronizedBuffer) Write(data []byte) (int, error) {
+	buffer.mu.Lock()
+	defer buffer.mu.Unlock()
+	return buffer.buffer.Write(data)
+}
+
+func (buffer *synchronizedBuffer) String() string {
+	buffer.mu.Lock()
+	defer buffer.mu.Unlock()
+	return buffer.buffer.String()
+}
+
+func restToken(output string) string {
+	for _, line := range strings.Split(output, "\n") {
+		if token, found := strings.CutPrefix(line, "REST control token: "); found {
+			return strings.TrimSpace(token)
+		}
+	}
+	return ""
+}
+
+func TestDaemonConfigValidationMode(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte("version: 1\nsession:\n  auto-start: false\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	if err := runDaemon(context.Background(), []string{"-t", "-f", path}, strings.NewReader(""), &output, io.Discard, func() core.Manager { t.Fatal("manager created in test mode"); return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(output.String(), "configuration is valid") {
+		t.Fatalf("output = %q", output.String())
+	}
+}
+
+func TestDaemonRejectsLegacySubcommands(t *testing.T) {
+	for _, command := range []string{"connect", "test", "web", "v2"} {
+		if _, err := parseDaemonOptions([]string{command}, io.Discard); err == nil {
+			t.Fatalf("legacy command %q was accepted", command)
+		}
+	}
+}
+
+func TestDaemonRequiresConfigForValidation(t *testing.T) {
+	if err := runDaemon(context.Background(), []string{"-t"}, strings.NewReader(""), io.Discard, io.Discard, func() core.Manager { return coremanager.New() }); err == nil {
+		t.Fatal("test config without file was accepted")
+	}
+}
+
+func TestControlCapabilitiesDescribeImplementedAPIs(t *testing.T) {
+	want := []string{"config", "resource_snapshots", "resource_refresh", "service_status", "traffic_stats", "connections", "transport_connections", "resume_state", "routing_modes", "stdio", "rest", "sse", "limitation_icmp", "limitation_socks5_udp_associate"}
+	available := make(map[string]bool, len(controlCapabilities))
+	for _, capability := range controlCapabilities {
+		available[capability] = true
+	}
+	for _, capability := range want {
+		if !available[capability] {
+			t.Fatalf("capability %q is missing from %#v", capability, controlCapabilities)
+		}
+	}
+}
+
+func TestSaveResumeStateAtomicallyUsesReadablePermissions(t *testing.T) {
+	directory := t.TempDir()
+	path := filepath.Join(directory, "resume.json")
+	if err := os.WriteFile(path, []byte("old"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	want := core.ResumeState{Format: core.ResumeStateFormatATrustClientData, Version: core.ResumeStateVersion1, Revision: 3, Data: "state"}
+	if err := saveResumeState(path, want); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if permissions := info.Mode().Perm(); permissions != 0644 {
+		t.Fatalf("resume state permissions = %o", permissions)
+	}
+	got, err := loadResumeState(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(*got, want) {
+		t.Fatalf("resume state = %#v, want %#v", *got, want)
+	}
+	temporary, err := filepath.Glob(filepath.Join(directory, ".resume.json.tmp-*"))
+	if err != nil || len(temporary) != 0 {
+		t.Fatalf("temporary files = %v, %v", temporary, err)
+	}
+}
+
+func TestPersistResumeStateEventsSavesUpdatedRevision(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "resume.json")
+	provider := resumeStateProviderStub{state: core.ResumeState{Revision: 8, Data: "updated"}}
+	events := make(chan core.Event, 2)
+	events <- core.Event{Type: core.EventTypeResourcesUpdated, SessionID: "default"}
+	events <- core.NewResumeStateUpdatedEvent("default", 8, false, time.Now())
+	close(events)
+	persistResumeStateEvents(context.Background(), events, provider, path)
+	state, err := loadResumeState(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Revision != 8 || state.Data != "updated" {
+		t.Fatalf("persisted state = %#v", state)
+	}
+}
+
+type resumeStateProviderStub struct {
+	state core.ResumeState
+}
+
+func (provider resumeStateProviderStub) ResumeState(core.SessionID) (core.ResumeState, error) {
+	return provider.state, nil
+}

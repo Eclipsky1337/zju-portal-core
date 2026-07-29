@@ -291,6 +291,17 @@ func TestStartBuildsAndClosesNetworkBeforeClient(t *testing.T) {
 	}
 }
 
+func TestRuntimeCloseReturnsNetworkCloseError(t *testing.T) {
+	wantErr := errors.New("network close failed")
+	runtime := &Runtime{outbound: wrapNetwork(&outboundStub{closeErr: wantErr}), ownsOutbound: true}
+	if err := runtime.CloseContext(context.Background()); !errors.Is(err, wantErr) {
+		t.Fatalf("CloseContext() error = %v", err)
+	}
+	if err := runtime.CloseContext(context.Background()); !errors.Is(err, wantErr) {
+		t.Fatalf("second CloseContext() error = %v", err)
+	}
+}
+
 func TestStartClassifiesNetworkSetupFailureAndClosesClient(t *testing.T) {
 	wantErr := errors.New("stack setup failed")
 	deps := defaultDependencies()
@@ -335,7 +346,8 @@ func (authHandlerStub) Handle(context.Context, core.AuthChallenge) (core.AuthRes
 }
 
 type outboundStub struct {
-	close func()
+	close    func()
+	closeErr error
 }
 
 func (*outboundStub) DialContext(context.Context, string, string) (net.Conn, error) {
@@ -346,5 +358,5 @@ func (outbound *outboundStub) Close(context.Context) error {
 	if outbound.close != nil {
 		outbound.close()
 	}
-	return nil
+	return outbound.closeErr
 }

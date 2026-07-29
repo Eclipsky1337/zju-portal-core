@@ -78,6 +78,7 @@ type Runtime struct {
 	closeMu      sync.Mutex
 	ownsOutbound bool
 	closeOnce    sync.Once
+	closeErr     error
 }
 
 func (r *Runtime) Client() clientpkg.Client {
@@ -197,7 +198,7 @@ func (r *Runtime) CloseContext(ctx context.Context) error {
 			outbound := r.outbound
 			r.closeMu.Unlock()
 			if ownsOutbound && outbound != nil {
-				_ = outbound.Close(context.Background())
+				r.closeErr = outbound.Close(context.Background())
 			}
 			r.stateMu.Lock()
 			client := r.client
@@ -215,7 +216,7 @@ func (r *Runtime) CloseContext(ctx context.Context) error {
 	}()
 	select {
 	case <-done:
-		return nil
+		return r.closeErr
 	case <-ctx.Done():
 		return ctx.Err()
 	}

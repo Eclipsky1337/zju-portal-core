@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/netip"
 	"sync"
 
 	"github.com/Eclipsky1337/zju-portal-core/client"
@@ -36,6 +37,7 @@ type Config struct {
 	TUNAddress           string
 	TUNMTU               uint32
 	TUNAutoRoute         bool
+	TUNRouteAll          bool
 	TUNStrictRoute       bool
 	TUNStack             string
 	TUNOutboundInterface string
@@ -44,6 +46,7 @@ type Config struct {
 	TUNDNSHijack         bool
 	TUNFakeIP            bool
 	TUNFakeIPRange       string
+	TUNRouteAddresses    []netip.Prefix
 	RoutingMode          core.RoutingMode
 	InternetOutbound     core.InternetOutboundConfig
 	newSOCKS5Service     func(string, core.Outbound, socks5.NameResolver, string, string) managedService
@@ -63,19 +66,21 @@ type serviceEntry struct {
 }
 
 type Runtime struct {
-	vpn           *switchableOutbound
-	router        *dial.Router
-	outbound      *trackedOutbound
-	connections   *connectionTracker
-	resolver      *switchableResolver
-	cancel        context.CancelFunc
-	services      []*serviceEntry
-	serviceEvents chan core.ServiceStatus
-	backendMu     sync.RWMutex
-	backend       *vpnBackend
-	closed        bool
-	closeOnce     sync.Once
-	closeErr      error
+	vpn            *switchableOutbound
+	router         *dial.Router
+	outbound       *trackedOutbound
+	connections    *connectionTracker
+	resolver       *switchableResolver
+	cancel         context.CancelFunc
+	services       []*serviceEntry
+	serviceEvents  chan core.ServiceStatus
+	backendMu      sync.RWMutex
+	backend        *vpnBackend
+	resourceRoutes bool
+	routeAddresses []netip.Prefix
+	closed         bool
+	closeOnce      sync.Once
+	closeErr       error
 }
 
 type vpnBackend struct {
@@ -83,6 +88,7 @@ type vpnBackend struct {
 	resolver *resolve.Resolver
 	stack    stackpkg.Managed
 	cancel   context.CancelFunc
+	routes   []netip.Prefix
 
 	runMu     sync.RWMutex
 	runErr    error
@@ -109,6 +115,10 @@ func New(ctx context.Context, vpnClient client.Client, config Config) (*Runtime,
 	backend, err := newVPNBackend(ctx, vpnClient, config)
 	if err != nil {
 		return nil, err
+	}
+	resourceRoutes := config.TUNEnabled && config.TUNAutoRoute && !config.TUNRouteAll
+	if resourceRoutes {
+		config.TUNRouteAddresses = append([]netip.Prefix(nil), backend.routes...)
 	}
 	internetFactory := config.newInternetOutbound
 	directOutbound := core.Outbound(dial.NewDirectOutbound())
@@ -148,14 +158,16 @@ func New(ctx context.Context, vpnClient client.Client, config Config) (*Runtime,
 		return nil, err
 	}
 	runtime := &Runtime{
-		vpn:           vpn,
-		router:        router,
-		outbound:      newTrackedOutbound(router),
-		connections:   newConnectionTracker(),
-		resolver:      resolver,
-		cancel:        cancel,
-		backend:       backend,
-		serviceEvents: make(chan core.ServiceStatus, 16),
+		vpn:            vpn,
+		router:         router,
+		outbound:       newTrackedOutbound(router),
+		connections:    newConnectionTracker(),
+		resolver:       resolver,
+		cancel:         cancel,
+		backend:        backend,
+		resourceRoutes: resourceRoutes,
+		routeAddresses: append([]netip.Prefix(nil), backend.routes...),
+		serviceEvents:  make(chan core.ServiceStatus, 16),
 	}
 	if err := runtime.startServices(runCtx, config); err != nil {
 		_ = runtime.Close(context.Background())
@@ -176,6 +188,18 @@ func newVPNBackend(ctx context.Context, vpnClient client.Client, config Config) 
 	dnsRecords, err := optionalDNSRecords(vpnClient)
 	if err != nil {
 		return nil, err
+	}
+	var routes []netip.Prefix
+	if config.TUNEnabled && config.TUNAutoRoute && !config.TUNRouteAll {
+		fakeIPRange := ""
+		if config.TUNFakeIP {
+			fakeIPRange = config.TUNFakeIPRange
+		}
+		routes, err = buildResourceRoutePrefixes(ipResources, dnsRecords, fakeIPRange)
+		if err != nil {
+			return nil, err
+		}
+		ipResources = addImplicitRouteResources(ipResources, dnsRecords)
 	}
 
 	var vpnStack stackpkg.Stack
@@ -242,6 +266,7 @@ func newVPNBackend(ctx context.Context, vpnClient client.Client, config Config) 
 		resolver: resolver,
 		stack:    managedStack,
 		cancel:   cancel,
+		routes:   routes,
 		done:     make(chan struct{}),
 	}
 	if !config.TCPTunnelMode {
@@ -261,6 +286,11 @@ func (runtime *Runtime) ReplaceVPN(ctx context.Context, vpnClient client.Client,
 		runtime.backendMu.Unlock()
 		_ = backend.Close(context.Background())
 		return core.WrapError(core.ErrorCodeOutboundUnavailable, "network runtime is closed", false, nil)
+	}
+	if runtime.resourceRoutes && !equalRoutePrefixes(runtime.routeAddresses, backend.routes) {
+		runtime.backendMu.Unlock()
+		_ = backend.Close(context.Background())
+		return core.WrapError(core.ErrorCodeRestartRequired, "VPN resource routes changed; restart Core to update TUN routes", false, nil)
 	}
 	oldBackend := runtime.backend
 	runtime.backend = backend
@@ -529,6 +559,13 @@ func (resolver *switchableResolver) ResolveStatic(host string) (net.IP, bool) {
 		return nil, false
 	}
 	return delegate.ResolveStatic(host)
+}
+
+func (resolver *switchableResolver) IsVPNDomain(host string) bool {
+	resolver.mu.RLock()
+	delegate := resolver.delegate
+	resolver.mu.RUnlock()
+	return delegate != nil && delegate.IsVPNDomain(host)
 }
 
 func (resolver *switchableResolver) Replace(delegate *resolve.Resolver) {

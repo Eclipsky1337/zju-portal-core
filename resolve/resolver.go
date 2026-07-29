@@ -60,18 +60,9 @@ func (r *Resolver) Resolve(ctx context.Context, host string) (resCtx context.Con
 			resCtx = context.WithValue(resCtx, ContextKeyResolveHost, host)
 		}
 	}()
-	var domainResourceFound = false
-	var domainResource client.DomainResource
-	if r.domainResources != nil {
-		for domain, resource := range r.domainResources {
-			if strings.HasSuffix(host, domain) {
-				domainResourceFound = true
-				domainResource = resource
-				ctx = context.WithValue(ctx, ContextKeyDomainResource, resource)
-				log.DebugPrintf("Domain resource found: %s", domain)
-				break
-			}
-		}
+	domainResource, domainResourceFound := r.matchDomainResource(host)
+	if domainResourceFound {
+		ctx = context.WithValue(ctx, ContextKeyDomainResource, domainResource)
 	}
 
 	if cachedIP, found := r.getDNSCache(host); found {
@@ -161,6 +152,21 @@ func (r *Resolver) Resolve(ctx context.Context, host string) (resCtx context.Con
 	} else {
 		return r.ResolveWithSecondaryDNS(ctx, host)
 	}
+}
+
+func (r *Resolver) IsVPNDomain(host string) bool {
+	_, found := r.matchDomainResource(normalizeDNSName(host))
+	return found
+}
+
+func (r *Resolver) matchDomainResource(host string) (client.DomainResource, bool) {
+	for domain, resource := range r.domainResources {
+		if strings.HasSuffix(host, domain) {
+			log.DebugPrintf("Domain resource found: %s", domain)
+			return resource, true
+		}
+	}
+	return client.DomainResource{}, false
 }
 
 func (r *Resolver) lookupRemoteIP(ctx context.Context, resolver *net.Resolver, host string) ([]net.IP, error) {

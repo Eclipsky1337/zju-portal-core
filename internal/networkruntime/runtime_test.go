@@ -5,12 +5,14 @@ import (
 	"errors"
 	"io"
 	"net"
+	"net/netip"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/Eclipsky1337/zju-portal-core/client"
 	"github.com/Eclipsky1337/zju-portal-core/core"
+	"github.com/Eclipsky1337/zju-portal-core/dial"
 	"github.com/Eclipsky1337/zju-portal-core/service"
 	"github.com/things-go/go-socks5"
 	"inet.af/netaddr"
@@ -124,7 +126,9 @@ func TestRuntimeStartsAndClosesConfiguredProxyServices(t *testing.T) {
 	var tunConfig TUNConfig
 	socks := &serviceStub{address: testAddr("127.0.0.1:1080")}
 	http := &serviceStub{address: testAddr("127.0.0.1:1081")}
-	runtime, err := New(context.Background(), &clientStub{}, Config{
+	runtime, err := New(context.Background(), &clientStub{domainResources: map[string]client.DomainResource{
+		".example.edu": {PortMin: 443, PortMax: 443, Protocol: "tcp"},
+	}}, Config{
 		TCPTunnelMode:        true,
 		DisableRemoteDNS:     true,
 		TUNEnabled:           true,
@@ -155,12 +159,107 @@ func TestRuntimeStartsAndClosesConfiguredProxyServices(t *testing.T) {
 	if tunConfig.UDPTimeout != 45*time.Second || tunConfig.UDPMaxFlows != 512 || !tunConfig.DNSHijack || tunConfig.Resolver == nil {
 		t.Fatalf("TUN config = %#v", tunConfig)
 	}
+	matcher, ok := tunConfig.Resolver.(tunVPNDomainMatcher)
+	if !ok || !matcher.IsVPNDomain("app.example.edu") || matcher.IsVPNDomain("www.example.com") {
+		t.Fatalf("TUN VPN domain matcher = %#v, %v", matcher, ok)
+	}
 
 	if err := runtime.Close(context.Background()); err != nil {
 		t.Fatalf("Close() error = %v", err)
 	}
 	if !tunService.started.Load() || !socks.started.Load() || !http.started.Load() || !tunService.closed.Load() || !socks.closed.Load() || !http.closed.Load() {
 		t.Fatalf("service lifecycle: tun=%#v socks=%#v http=%#v", tunService, socks, http)
+	}
+}
+
+func TestSelectiveTUNKeepsRuleRouterForInternetFallback(t *testing.T) {
+	resource := client.IPResource{
+		IPMin: net.ParseIP("192.0.2.1"), IPMax: net.ParseIP("192.0.2.255"),
+		PortMin: 1, PortMax: 65535, Protocol: "all",
+	}
+	internet := &outboundStub{}
+	service := &serviceStub{address: testAddr("ZJU-Portal 172.19.0.1/30")}
+	var tunOutbound core.Outbound
+	runtime, err := New(context.Background(), &clientStub{ipResources: []client.IPResource{resource}}, Config{
+		TCPTunnelMode:        true,
+		DisableRemoteDNS:     true,
+		TUNEnabled:           true,
+		TUNAutoRoute:         true,
+		TUNFakeIP:            true,
+		TUNFakeIPRange:       "198.18.0.0/16",
+		TUNOutboundInterface: "test0",
+		newInternetOutbound: func(core.InternetOutboundConfig) (core.Outbound, error) {
+			return internet, nil
+		},
+		newTUNService: func(config TUNConfig, outbound core.Outbound, _ core.ConnectionObserver) (managedService, error) {
+			if !routePrefixesContain(config.RouteAddresses, netip.MustParseAddr("198.18.0.1")) {
+				t.Fatalf("selective routes %v do not contain fake IP range", config.RouteAddresses)
+			}
+			tunOutbound = outbound
+			return service, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runtime.Close(context.Background())
+
+	conn, err := tunOutbound.DialContext(context.Background(), "tcp", "8.8.8.8:443")
+	if err != nil {
+		t.Fatalf("public internet fallback: %v", err)
+	}
+	if route := core.RouteInfoOf(conn); route.Outbound != dial.OutboundInternet {
+		t.Fatalf("public internet route info = %#v", route)
+	}
+	_ = conn.Close()
+
+	conn, err = tunOutbound.DialContext(context.Background(), "tcp", "10.1.2.3:443")
+	if err != nil {
+		t.Fatalf("built-in ZJU route: %v", err)
+	}
+	if route := core.RouteInfoOf(conn); route.Outbound != dial.OutboundATrust {
+		t.Fatalf("built-in ZJU route info = %#v", route)
+	}
+	_ = conn.Close()
+	if got := internet.dialCount.Load(); got != 1 {
+		t.Fatalf("internet dial count = %d, want 1", got)
+	}
+}
+
+func TestRouteAllTUNKeepsRuleRouter(t *testing.T) {
+	internet := &outboundStub{}
+	service := &serviceStub{address: testAddr("ZJU-Portal 172.19.0.1/30")}
+	var tunOutbound core.Outbound
+	runtime, err := New(context.Background(), &clientStub{}, Config{
+		TCPTunnelMode:        true,
+		DisableRemoteDNS:     true,
+		TUNEnabled:           true,
+		TUNAutoRoute:         true,
+		TUNRouteAll:          true,
+		TUNOutboundInterface: "test0",
+		newInternetOutbound: func(core.InternetOutboundConfig) (core.Outbound, error) {
+			return internet, nil
+		},
+		newTUNService: func(config TUNConfig, outbound core.Outbound, _ core.ConnectionObserver) (managedService, error) {
+			if len(config.RouteAddresses) != 0 {
+				t.Fatalf("route-all TUN routes = %v, want none", config.RouteAddresses)
+			}
+			tunOutbound = outbound
+			return service, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runtime.Close(context.Background())
+
+	conn, err := tunOutbound.DialContext(context.Background(), "tcp", "8.8.8.8:443")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = conn.Close()
+	if got := internet.dialCount.Load(); got != 1 {
+		t.Fatalf("internet dial count = %d, want 1", got)
 	}
 }
 
@@ -357,6 +456,49 @@ func TestRuntimeReplacesVPNWithoutRestartingProxyServices(t *testing.T) {
 	_ = conn.Close()
 	if firstClient.dialCount.Load() != 0 || secondClient.dialCount.Load() != 1 {
 		t.Fatalf("dial counts: first=%d second=%d", firstClient.dialCount.Load(), secondClient.dialCount.Load())
+	}
+}
+
+func TestSelectiveTUNRequiresRestartWhenResourceRoutesChange(t *testing.T) {
+	firstResource := client.IPResource{
+		IPMin: net.ParseIP("192.0.2.1"), IPMax: net.ParseIP("192.0.2.255"),
+		PortMin: 1, PortMax: 65535, Protocol: "all",
+	}
+	secondResource := client.IPResource{
+		IPMin: net.ParseIP("198.51.100.1"), IPMax: net.ParseIP("198.51.100.255"),
+		PortMin: 1, PortMax: 65535, Protocol: "all",
+	}
+	firstClient := &clientStub{ipResources: []client.IPResource{firstResource}}
+	config := Config{
+		TCPTunnelMode:        true,
+		DisableRemoteDNS:     true,
+		TUNEnabled:           true,
+		TUNAutoRoute:         true,
+		TUNOutboundInterface: "test0",
+		newInternetOutbound: func(core.InternetOutboundConfig) (core.Outbound, error) {
+			return &outboundStub{}, nil
+		},
+		newTUNService: func(TUNConfig, core.Outbound, core.ConnectionObserver) (managedService, error) {
+			return &serviceStub{address: testAddr("ZJU-Portal 172.19.0.1/30")}, nil
+		},
+	}
+	runtime, err := New(context.Background(), firstClient, config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runtime.Close(context.Background())
+
+	err = runtime.ReplaceVPN(context.Background(), &clientStub{ipResources: []client.IPResource{secondResource}}, config)
+	if core.ErrorCodeOf(err) != core.ErrorCodeRestartRequired {
+		t.Fatalf("ReplaceVPN() error = %v, want restart required", err)
+	}
+	conn, err := runtime.DialContext(context.Background(), "tcp", "192.0.2.8:443")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = conn.Close()
+	if got := firstClient.dialCount.Load(); got != 1 {
+		t.Fatalf("original VPN dial count = %d, want 1", got)
 	}
 }
 

@@ -37,6 +37,7 @@ inbounds:
   tun:
     enabled: true
     auto-route: true
+    route-all: true
     dns:
       fake-ip: true
 `))
@@ -47,7 +48,7 @@ inbounds:
 		t.Fatalf("defaults not applied: %#v", config)
 	}
 	mapped := config.CoreConfig()
-	if mapped.ServerAddress != "vpn.example.edu" || mapped.InternetOutbound.Type != core.InternetOutboundSOCKS5 || mapped.SOCKSBind != "127.0.0.1:1080" || !mapped.TUNEnabled || !mapped.TUNFakeIP {
+	if mapped.ServerAddress != "vpn.example.edu" || mapped.InternetOutbound.Type != core.InternetOutboundSOCKS5 || mapped.SOCKSBind != "127.0.0.1:1080" || !mapped.TUNEnabled || !mapped.TUNRouteAll || !mapped.TUNFakeIP {
 		t.Fatalf("core config = %#v", mapped)
 	}
 }

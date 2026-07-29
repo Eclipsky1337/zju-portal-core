@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"net/netip"
+	"reflect"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -89,6 +90,93 @@ func TestTUNServiceControlsSystemDNS(t *testing.T) {
 	}
 	if !controller.restored.Load() {
 		t.Fatal("system DNS was not restored")
+	}
+}
+
+func TestTUNServicePassesSelectiveRouteAddresses(t *testing.T) {
+	routes := []netip.Prefix{netip.MustParsePrefix("10.0.0.0/8"), netip.MustParsePrefix("203.0.113.9/32")}
+	created, err := newTUNService(TUNConfig{AutoRoute: true, RouteAddresses: routes}, &outboundStub{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := created.(*tunService)
+	device := &tunDeviceStub{}
+	stack := &tunStackStub{}
+	var options tun.Options
+	service.newDevice = func(received tun.Options) (tun.Tun, error) {
+		options = received
+		return device, nil
+	}
+	service.newStack = func(string, tun.StackOptions) (tun.Stack, error) { return stack, nil }
+	if err := service.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	defer service.Close(context.Background())
+	if !reflect.DeepEqual(options.Inet4RouteAddress, routes) {
+		t.Fatalf("route addresses = %v, want %v", options.Inet4RouteAddress, routes)
+	}
+}
+
+func TestTUNServiceAddsDNSPeerToSelectiveRoutes(t *testing.T) {
+	routes := []netip.Prefix{netip.MustParsePrefix("10.0.0.0/8")}
+	controller := &systemDNSStub{}
+	created, err := newTUNService(TUNConfig{
+		AutoRoute:      true,
+		DNSHijack:      true,
+		RouteAddresses: routes,
+		SystemDNS:      controller,
+	}, &outboundStub{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := created.(*tunService)
+	device := &tunDeviceStub{}
+	stack := &tunStackStub{}
+	var options tun.Options
+	service.newDevice = func(received tun.Options) (tun.Tun, error) {
+		options = received
+		return device, nil
+	}
+	service.newStack = func(string, tun.StackOptions) (tun.Stack, error) { return stack, nil }
+	if err := service.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	defer service.Close(context.Background())
+
+	want := []netip.Prefix{
+		netip.MustParsePrefix("10.0.0.0/8"),
+		netip.MustParsePrefix("172.19.0.2/32"),
+	}
+	if !reflect.DeepEqual(options.Inet4RouteAddress, want) {
+		t.Fatalf("route addresses = %v, want %v", options.Inet4RouteAddress, want)
+	}
+}
+
+func TestTUNServiceKeepsEmptyRoutesForRouteAllDNSHijack(t *testing.T) {
+	created, err := newTUNService(TUNConfig{
+		AutoRoute: true,
+		DNSHijack: true,
+		SystemDNS: &systemDNSStub{},
+	}, &outboundStub{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := created.(*tunService)
+	device := &tunDeviceStub{}
+	stack := &tunStackStub{}
+	var options tun.Options
+	service.newDevice = func(received tun.Options) (tun.Tun, error) {
+		options = received
+		return device, nil
+	}
+	service.newStack = func(string, tun.StackOptions) (tun.Stack, error) { return stack, nil }
+	if err := service.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	defer service.Close(context.Background())
+
+	if len(options.Inet4RouteAddress) != 0 {
+		t.Fatalf("route-all addresses = %v, want none", options.Inet4RouteAddress)
 	}
 }
 

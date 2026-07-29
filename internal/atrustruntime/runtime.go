@@ -53,6 +53,7 @@ type Config struct {
 	TUNAddress              string
 	TUNMTU                  uint32
 	TUNAutoRoute            bool
+	TUNRouteAll             bool
 	TUNStrictRoute          bool
 	TUNStack                string
 	TUNOutboundInterface    string
@@ -280,6 +281,7 @@ func defaultDependencies() dependencies {
 				TUNAddress:           config.TUNAddress,
 				TUNMTU:               config.TUNMTU,
 				TUNAutoRoute:         config.TUNAutoRoute,
+				TUNRouteAll:          config.TUNRouteAll,
 				TUNStrictRoute:       config.TUNStrictRoute,
 				TUNStack:             config.TUNStack,
 				TUNOutboundInterface: config.TUNOutboundInterface,

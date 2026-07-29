@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/netip"
 	"strconv"
 
 	"github.com/Eclipsky1337/zju-portal-core/internal/dnsmessage"
@@ -17,6 +18,17 @@ import (
 
 type tunResolver interface {
 	Resolve(context.Context, string) (context.Context, net.IP, error)
+}
+
+type tunVPNDomainMatcher interface {
+	IsVPNDomain(string) bool
+}
+
+type tunFakeIPResolver struct {
+	resolver tunResolver
+	matcher  tunVPNDomainMatcher
+	routes   []netip.Prefix
+	fakeIPs  *fakeIPStore
 }
 
 func (service *tunService) routeDestination(destination M.Socksaddr) string {
@@ -77,7 +89,45 @@ func (service *tunService) handleDNSPayload(ctx context.Context, payload []byte)
 	}
 	handler := dnsmessage.Handler{Resolver: service.config.Resolver}
 	if service.fakeIPs != nil {
-		handler.FakeIPv4 = service.fakeIPs.Assign
+		if service.config.Resolver == nil {
+			handler.FakeIPv4 = service.fakeIPs.Assign
+		} else {
+			resolver := &tunFakeIPResolver{
+				resolver: service.config.Resolver,
+				routes:   service.config.RouteAddresses,
+				fakeIPs:  service.fakeIPs,
+			}
+			resolver.matcher, _ = service.config.Resolver.(tunVPNDomainMatcher)
+			handler.Resolver = resolver
+		}
 	}
 	return handler.Handle(ctx, request).Pack()
+}
+
+func (resolver *tunFakeIPResolver) Resolve(ctx context.Context, host string) (context.Context, net.IP, error) {
+	if resolver.matcher != nil && resolver.matcher.IsVPNDomain(host) {
+		return resolver.assign(ctx, host)
+	}
+	resolvedCtx, address, err := resolver.resolver.Resolve(ctx, host)
+	if err != nil {
+		return resolvedCtx, nil, err
+	}
+	parsed, valid := netip.AddrFromSlice(address)
+	if valid {
+		parsed = parsed.Unmap()
+		for _, route := range resolver.routes {
+			if route.Contains(parsed) {
+				return resolver.assign(resolvedCtx, host)
+			}
+		}
+	}
+	return resolvedCtx, address, nil
+}
+
+func (resolver *tunFakeIPResolver) assign(ctx context.Context, host string) (context.Context, net.IP, error) {
+	address, err := resolver.fakeIPs.Assign(host)
+	if err != nil {
+		return ctx, nil, err
+	}
+	return ctx, net.IP(address.AsSlice()), nil
 }

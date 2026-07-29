@@ -68,6 +68,7 @@ inbounds:
     address: 172.19.0.1/30
     mtu: 1400
     auto-route: false
+    route-all: false
     outbound-interface: ""
     udp:
       idle-timeout: 60s

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
+	"strings"
 	"sync"
 	"time"
 
@@ -90,6 +91,9 @@ func (d *Dialer) DialContext(ctx context.Context, network, address string) (net.
 	if d == nil {
 		return (&net.Dialer{}).DialContext(ctx, network, address)
 	}
+	if isLoopbackDestination(address) {
+		return dialOnInterface(ctx, network, address, "")
+	}
 
 	d.mu.RLock()
 	interfaceName := d.interfaceName
@@ -118,6 +122,19 @@ func (d *Dialer) DialContext(ctx context.Context, network, address string) (net.
 		return nil, fmt.Errorf("dial underlay via %q failed after %q failed: %w", refreshedInterface, interfaceName, retryErr)
 	}
 	return conn, nil
+}
+
+func isLoopbackDestination(address string) bool {
+	host, _, err := net.SplitHostPort(address)
+	if err != nil {
+		host = address
+	}
+	host = strings.TrimSuffix(host, ".")
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 func dialContextOnInterface(ctx context.Context, network, address, interfaceName string) (net.Conn, error) {

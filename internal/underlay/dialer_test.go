@@ -106,3 +106,31 @@ func TestDialContextDoesNotReplaceManualInterface(t *testing.T) {
 		t.Fatal("manual interface triggered automatic re-detection")
 	}
 }
+
+func TestDialContextDoesNotBindLoopbackDestinations(t *testing.T) {
+	originalDial := dialOnInterface
+	t.Cleanup(func() { dialOnInterface = originalDial })
+
+	for _, address := range []string{"127.0.0.1:7890", "[::1]:7890", "localhost:7890", "LOCALHOST.:7890"} {
+		t.Run(address, func(t *testing.T) {
+			var interfaces []string
+			client, server := net.Pipe()
+			t.Cleanup(func() {
+				_ = client.Close()
+				_ = server.Close()
+			})
+			dialOnInterface = func(_ context.Context, _, _, interfaceName string) (net.Conn, error) {
+				interfaces = append(interfaces, interfaceName)
+				return client, nil
+			}
+
+			dialer := New("", Options{InterfaceName: "physical-interface"})
+			if _, err := dialer.DialContext(context.Background(), "tcp", address); err != nil {
+				t.Fatal(err)
+			}
+			if len(interfaces) != 1 || interfaces[0] != "" {
+				t.Fatalf("dial interfaces = %q, want one unbound attempt", interfaces)
+			}
+		})
+	}
+}

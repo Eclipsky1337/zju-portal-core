@@ -72,9 +72,14 @@ func TestTUNDNSHijackUsesResolverWithoutFakeIP(t *testing.T) {
 	}
 }
 
-func TestTUNFakeIPPrefersStaticDNSRecord(t *testing.T) {
+func TestTUNFakeIPClassifiesStaticDNSRecordByResolvedAddress(t *testing.T) {
 	resolver := &tunResolverStub{ip: net.ParseIP("203.0.113.8"), staticIP: net.ParseIP("10.0.0.8")}
-	created, err := newTUNService(TUNConfig{FakeIP: true, AutoRoute: true, Resolver: resolver}, &outboundStub{}, nil)
+	created, err := newTUNService(TUNConfig{
+		FakeIP:         true,
+		AutoRoute:      true,
+		Resolver:       resolver,
+		RouteAddresses: []netip.Prefix{netip.MustParsePrefix("10.0.0.0/8")},
+	}, &outboundStub{}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -90,9 +95,83 @@ func TestTUNFakeIPPrefersStaticDNSRecord(t *testing.T) {
 	if err := response.Unpack(responsePayload); err != nil {
 		t.Fatal(err)
 	}
-	if len(response.Answer) != 1 || !response.Answer[0].(*dns.A).A.Equal(net.ParseIP("10.0.0.8")) {
+	if len(response.Answer) != 1 || response.Answer[0].(*dns.A).A.Equal(net.ParseIP("10.0.0.8")) {
 		t.Fatalf("DNS answers = %#v", response.Answer)
 	}
+	address, ok := netip.AddrFromSlice(response.Answer[0].(*dns.A).A)
+	if !ok {
+		t.Fatalf("fake IP = %v", response.Answer[0].(*dns.A).A)
+	}
+	if domain, found := service.fakeIPs.Lookup(address.Unmap()); !found || domain != "app.example.edu" {
+		t.Fatalf("static fake IP lookup = %q, %v", domain, found)
+	}
+}
+
+func TestTUNFakeIPOnlyAppliesToVPNDomains(t *testing.T) {
+	resolver := &tunResolverStub{
+		vpnDomains: map[string]bool{"app.example.edu": true},
+		ips: map[string]net.IP{
+			"cc98.org":        net.ParseIP("10.10.98.98"),
+			"www.example.com": net.ParseIP("203.0.113.8"),
+		},
+	}
+	created, err := newTUNService(TUNConfig{
+		FakeIP:         true,
+		AutoRoute:      true,
+		Resolver:       resolver,
+		RouteAddresses: []netip.Prefix{netip.MustParsePrefix("10.0.0.0/8")},
+	}, &outboundStub{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := created.(*tunService)
+
+	vpnAddress := queryTUNARecord(t, service, "app.example.edu.")
+	vpnFakeIP, ok := netip.AddrFromSlice(vpnAddress)
+	if !ok {
+		t.Fatalf("VPN fake IP = %v", vpnAddress)
+	}
+	if domain, found := service.fakeIPs.Lookup(vpnFakeIP.Unmap()); !found || domain != "app.example.edu" {
+		t.Fatalf("VPN fake IP lookup = %q, %v", domain, found)
+	}
+	resolvedVPNAddress := queryTUNARecord(t, service, "cc98.org.")
+	resolvedVPNFakeIP, ok := netip.AddrFromSlice(resolvedVPNAddress)
+	if !ok {
+		t.Fatalf("resolved VPN fake IP = %v", resolvedVPNAddress)
+	}
+	if domain, found := service.fakeIPs.Lookup(resolvedVPNFakeIP.Unmap()); !found || domain != "cc98.org" {
+		t.Fatalf("resolved VPN fake IP lookup = %q, %v", domain, found)
+	}
+
+	publicAddress := queryTUNARecord(t, service, "www.example.com.")
+	if !publicAddress.Equal(net.ParseIP("203.0.113.8")) {
+		t.Fatalf("public DNS address = %s", publicAddress)
+	}
+	if resolver.host != "www.example.com" {
+		t.Fatalf("resolved public host = %q", resolver.host)
+	}
+}
+
+func queryTUNARecord(t *testing.T, service *tunService, domain string) net.IP {
+	t.Helper()
+	query := new(dns.Msg)
+	query.SetQuestion(domain, dns.TypeA)
+	payload, err := query.Pack()
+	if err != nil {
+		t.Fatal(err)
+	}
+	responsePayload, err := service.handleDNSPayload(context.Background(), payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := new(dns.Msg)
+	if err := response.Unpack(responsePayload); err != nil {
+		t.Fatal(err)
+	}
+	if len(response.Answer) != 1 {
+		t.Fatalf("DNS answers = %#v", response.Answer)
+	}
+	return response.Answer[0].(*dns.A).A
 }
 
 func TestTUNFakeIPConnectionTrackingUsesDomain(t *testing.T) {
@@ -164,9 +243,11 @@ func TestFakeIPStoreReturnsStableAddress(t *testing.T) {
 }
 
 type tunResolverStub struct {
-	ip       net.IP
-	staticIP net.IP
-	host     string
+	ip         net.IP
+	ips        map[string]net.IP
+	staticIP   net.IP
+	host       string
+	vpnDomains map[string]bool
 }
 
 type capturingTUNOutbound struct {
@@ -185,9 +266,19 @@ var _ core.Outbound = (*capturingTUNOutbound)(nil)
 
 func (resolver *tunResolverStub) Resolve(ctx context.Context, host string) (context.Context, net.IP, error) {
 	resolver.host = host
+	if resolver.staticIP != nil {
+		return ctx, resolver.staticIP, nil
+	}
+	if address := resolver.ips[host]; address != nil {
+		return ctx, address, nil
+	}
 	return ctx, resolver.ip, nil
 }
 
 func (resolver *tunResolverStub) ResolveStatic(string) (net.IP, bool) {
 	return resolver.staticIP, resolver.staticIP != nil
+}
+
+func (resolver *tunResolverStub) IsVPNDomain(host string) bool {
+	return resolver.vpnDomains[host]
 }

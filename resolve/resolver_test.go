@@ -9,9 +9,22 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Eclipsky1337/zju-portal-core/client"
 	"github.com/miekg/dns"
 	"github.com/patrickmn/go-cache"
 )
+
+func TestResolverMatchesVPNDomain(t *testing.T) {
+	resolver := &Resolver{domainResources: map[string]client.DomainResource{
+		".example.edu": {PortMin: 443, PortMax: 443, Protocol: "tcp"},
+	}}
+	if !resolver.IsVPNDomain("APP.EXAMPLE.EDU.") {
+		t.Fatal("VPN domain was not matched")
+	}
+	if resolver.IsVPNDomain("www.example.com") {
+		t.Fatal("public domain unexpectedly matched VPN resources")
+	}
+}
 
 func TestNewResolverPropagatesContextToVPNDNSDial(t *testing.T) {
 	const key contextKeyForTest = "request"

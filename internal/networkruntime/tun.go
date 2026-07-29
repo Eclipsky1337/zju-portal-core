@@ -40,6 +40,7 @@ type TUNConfig struct {
 	DNSHijack         bool
 	FakeIP            bool
 	FakeIPRange       string
+	RouteAddresses    []netip.Prefix
 	Resolver          tunResolver
 	OutboundInterface string
 	SystemDNS         systemdns.Controller
@@ -177,14 +178,16 @@ func (service *tunService) start(ctx context.Context) error {
 	}
 	prefix, _ := netip.ParsePrefix(service.config.Address)
 	name := tun.CalculateInterfaceName(service.config.Name)
+	routeAddresses := service.routeAddresses()
 	options := tun.Options{
-		Name:         name,
-		MTU:          service.config.MTU,
-		Inet4Address: []netip.Prefix{prefix},
-		AutoRoute:    service.config.AutoRoute,
-		StrictRoute:  service.config.StrictRoute,
-		TableIndex:   1898,
-		Logger:       logger.NOP(),
+		Name:              name,
+		MTU:               service.config.MTU,
+		Inet4Address:      []netip.Prefix{prefix},
+		AutoRoute:         service.config.AutoRoute,
+		StrictRoute:       service.config.StrictRoute,
+		Inet4RouteAddress: routeAddresses,
+		TableIndex:        1898,
+		Logger:            logger.NOP(),
 	}
 	device, err := service.newDevice(options)
 	if err != nil {
@@ -236,6 +239,23 @@ func (service *tunService) start(ctx context.Context) error {
 	context.AfterFunc(ctx, func() { _ = service.Close(context.Background()) })
 	log.Printf("TUN interface %s listening on %s", name, prefix)
 	return nil
+}
+
+func (service *tunService) routeAddresses() []netip.Prefix {
+	routes := append([]netip.Prefix(nil), service.config.RouteAddresses...)
+	if len(routes) == 0 || !service.config.DNSHijack {
+		return routes
+	}
+	dnsAddress, err := netip.ParseAddr(service.dnsServer)
+	if err != nil {
+		return routes
+	}
+	for _, route := range routes {
+		if route.Contains(dnsAddress) {
+			return routes
+		}
+	}
+	return append(routes, netip.PrefixFrom(dnsAddress, dnsAddress.BitLen()))
 }
 
 func tunStackName(configured string) string {

@@ -363,6 +363,7 @@ func toRuntimeConfig(config core.Config) atrustruntime.Config {
 		TUNAddress:              config.TUNAddress,
 		TUNMTU:                  config.TUNMTU,
 		TUNAutoRoute:            config.TUNAutoRoute,
+		TUNRouteAll:             config.TUNRouteAll,
 		TUNOutboundInterface:    tunOutboundInterface,
 		TUNUDPTimeoutSeconds:    config.TUNUDPTimeoutSeconds,
 		TUNUDPMaxFlows:          config.TUNUDPMaxFlows,

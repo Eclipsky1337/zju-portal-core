@@ -156,6 +156,7 @@ type TUNConfig struct {
 	Address           string       `yaml:"address" json:"address"`
 	MTU               uint32       `yaml:"mtu" json:"mtu"`
 	AutoRoute         bool         `yaml:"auto-route" json:"auto-route"`
+	RouteAll          bool         `yaml:"route-all" json:"route-all"`
 	OutboundInterface string       `yaml:"outbound-interface" json:"outbound-interface"`
 	UDP               TUNUDPConfig `yaml:"udp" json:"udp"`
 	DNS               TUNDNSConfig `yaml:"dns" json:"dns"`
@@ -346,6 +347,7 @@ func (config Config) CoreConfig() core.Config {
 		result.TUNAddress = tun.Address
 		result.TUNMTU = tun.MTU
 		result.TUNAutoRoute = tun.AutoRoute
+		result.TUNRouteAll = tun.RouteAll
 		result.TUNOutboundInterface = tun.OutboundInterface
 		result.TUNUDPTimeoutSeconds = int(time.Duration(tun.UDP.IdleTimeout) / time.Second)
 		result.TUNUDPMaxFlows = tun.UDP.MaxFlows

@@ -37,6 +37,7 @@ type Config struct {
 	TUNAddress             string                 `json:"tun_address,omitempty"`
 	TUNMTU                 uint32                 `json:"tun_mtu,omitempty"`
 	TUNAutoRoute           bool                   `json:"tun_auto_route,omitempty"`
+	TUNRouteAll            bool                   `json:"tun_route_all,omitempty"`
 	TUNOutboundInterface   string                 `json:"tun_outbound_interface,omitempty"`
 	TUNUDPTimeoutSeconds   int                    `json:"tun_udp_timeout_seconds,omitempty"`
 	TUNUDPMaxFlows         int                    `json:"tun_udp_max_flows,omitempty"`

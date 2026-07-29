@@ -93,6 +93,45 @@ func TestTUNServiceControlsSystemDNS(t *testing.T) {
 	}
 }
 
+func TestTUNServiceContinuesDNSRestoreAfterCloseContextCancellation(t *testing.T) {
+	controller := &systemDNSStub{restoreEntered: make(chan struct{}), restoreRelease: make(chan struct{})}
+	created, err := newTUNService(TUNConfig{
+		DNSHijack: true,
+		AutoRoute: true,
+		SystemDNS: controller,
+	}, &outboundStub{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := created.(*tunService)
+	service.newDevice = func(tun.Options) (tun.Tun, error) { return &tunDeviceStub{}, nil }
+	service.newStack = func(string, tun.StackOptions) (tun.Stack, error) { return &tunStackStub{}, nil }
+	if err := service.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := service.Close(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Close() error = %v, want context canceled", err)
+	}
+	select {
+	case <-controller.restoreEntered:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for DNS restore")
+	}
+	if controller.restoreCanceled.Load() {
+		t.Fatal("DNS restore inherited canceled caller context")
+	}
+	close(controller.restoreRelease)
+	if err := service.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if calls := controller.restoreCalls.Load(); calls != 1 {
+		t.Fatalf("Restore() calls = %d, want 1", calls)
+	}
+}
+
 func TestTUNServicePassesSelectiveRouteAddresses(t *testing.T) {
 	routes := []netip.Prefix{netip.MustParsePrefix("10.0.0.0/8"), netip.MustParsePrefix("203.0.113.9/32")}
 	created, err := newTUNService(TUNConfig{AutoRoute: true, RouteAddresses: routes}, &outboundStub{}, nil)
@@ -395,9 +434,13 @@ type tunStackStub struct {
 }
 
 type systemDNSStub struct {
-	applied  string
-	applyErr error
-	restored atomic.Bool
+	applied         string
+	applyErr        error
+	restored        atomic.Bool
+	restoreCanceled atomic.Bool
+	restoreCalls    atomic.Int32
+	restoreEntered  chan struct{}
+	restoreRelease  chan struct{}
 }
 
 func (controller *systemDNSStub) Apply(_ context.Context, address string) error {
@@ -405,7 +448,21 @@ func (controller *systemDNSStub) Apply(_ context.Context, address string) error 
 	return controller.applyErr
 }
 
-func (controller *systemDNSStub) Restore(context.Context) error {
+func (controller *systemDNSStub) Restore(ctx context.Context) error {
+	controller.restoreCalls.Add(1)
+	if ctx.Err() != nil {
+		controller.restoreCanceled.Store(true)
+	}
+	if controller.restoreEntered != nil {
+		close(controller.restoreEntered)
+	}
+	if controller.restoreRelease != nil {
+		select {
+		case <-controller.restoreRelease:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
 	controller.restored.Store(true)
 	return nil
 }

@@ -26,6 +26,7 @@ const (
 	defaultTUNStack              = "auto"
 	defaultTUNUDPTimeout         = 60 * time.Second
 	defaultTUNUDPMaxFlows        = 4096
+	tunCleanupTimeout            = 5 * time.Second
 )
 
 type TUNConfig struct {
@@ -62,6 +63,7 @@ type tunService struct {
 	startErr  error
 	closeOnce sync.Once
 	closeErr  error
+	closeDone chan struct{}
 	runErr    error
 	done      chan struct{}
 	doneOnce  sync.Once
@@ -137,6 +139,7 @@ func newTUNService(config TUNConfig, outbound core.Outbound, observer core.Conne
 		newStack:  tun.NewStack,
 		udpFlows:  make(map[*tunUDPFlow]struct{}),
 		done:      make(chan struct{}),
+		closeDone: make(chan struct{}),
 		systemDNS: config.SystemDNS,
 		dnsServer: dnsServer,
 	}
@@ -281,30 +284,42 @@ func (service *tunService) Err() error {
 
 func (service *tunService) Close(ctx context.Context) error {
 	service.closeOnce.Do(func() {
-		service.mu.Lock()
-		service.closed = true
-		stack := service.stack
-		device := service.device
-		service.addr = nil
-		service.mu.Unlock()
-		var closeErrors []error
-		if service.systemDNS != nil {
-			restoreErr := service.systemDNS.Restore(ctx)
-			closeErrors = append(closeErrors, restoreErr)
-			if restoreErr == nil {
-				log.Printf("System DNS on %s restored", service.config.OutboundInterface)
-			}
-		}
-		if stack != nil {
-			closeErrors = append(closeErrors, stack.Close())
-		}
-		if device != nil {
-			closeErrors = append(closeErrors, device.Close())
-		}
-		service.closeErr = errors.Join(closeErrors...)
-		service.signalDone()
+		go service.close()
 	})
-	return service.closeErr
+	select {
+	case <-service.closeDone:
+		return service.closeErr
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (service *tunService) close() {
+	service.mu.Lock()
+	service.closed = true
+	stack := service.stack
+	device := service.device
+	service.addr = nil
+	service.mu.Unlock()
+	var closeErrors []error
+	if service.systemDNS != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), tunCleanupTimeout)
+		restoreErr := service.systemDNS.Restore(ctx)
+		cancel()
+		closeErrors = append(closeErrors, restoreErr)
+		if restoreErr == nil {
+			log.Printf("System DNS on %s restored", service.config.OutboundInterface)
+		}
+	}
+	if stack != nil {
+		closeErrors = append(closeErrors, stack.Close())
+	}
+	if device != nil {
+		closeErrors = append(closeErrors, device.Close())
+	}
+	service.closeErr = errors.Join(closeErrors...)
+	service.signalDone()
+	close(service.closeDone)
 }
 
 func (service *tunService) handleDeviceError(err error) {

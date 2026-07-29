@@ -68,15 +68,10 @@ type Config struct {
 	NodeSelectionHandler    func(map[string]string)
 }
 
-type replaceableNetworkRuntime interface {
-	core.Outbound
-	ReplaceVPN(context.Context, clientpkg.Client, networkruntime.Config) error
-}
-
 type Runtime struct {
 	stateMu      sync.RWMutex
 	client       *atrustclient.Client
-	outbound     core.Outbound
+	outbound     *networkSession
 	resumeState  core.ResumeState
 	closeClient  func()
 	closeMu      sync.Mutex
@@ -91,10 +86,13 @@ func (r *Runtime) Client() clientpkg.Client {
 }
 
 func (r *Runtime) Outbound() core.Outbound {
-	return r.outbound
+	if r.outbound == nil {
+		return nil
+	}
+	return r.outbound.outbound
 }
 
-func (r *Runtime) DetachOutbound() core.Outbound {
+func (r *Runtime) DetachOutbound() *networkSession {
 	r.closeMu.Lock()
 	r.ownsOutbound = false
 	r.closeMu.Unlock()
@@ -102,19 +100,17 @@ func (r *Runtime) DetachOutbound() core.Outbound {
 }
 
 func (r *Runtime) Done() <-chan struct{} {
-	provider, ok := r.outbound.(interface{ Done() <-chan struct{} })
-	if !ok {
+	if r.outbound == nil {
 		return nil
 	}
-	return provider.Done()
+	return r.outbound.Done()
 }
 
 func (r *Runtime) Err() error {
-	provider, ok := r.outbound.(interface{ Err() error })
-	if !ok {
+	if r.outbound == nil {
 		return nil
 	}
-	return provider.Err()
+	return r.outbound.Err()
 }
 
 func (r *Runtime) ResumeState() (core.ResumeState, error) {
@@ -152,45 +148,39 @@ func (r *Runtime) adoptClient(candidate *Runtime) func() {
 }
 
 func (r *Runtime) Services() []core.ServiceStatus {
-	provider, ok := r.outbound.(interface{ Services() []core.ServiceStatus })
-	if !ok {
+	if r.outbound == nil {
 		return []core.ServiceStatus{}
 	}
-	return provider.Services()
+	services, _ := r.outbound.Services()
+	return services
 }
 
 func (r *Runtime) TrafficStats() (core.TrafficStats, error) {
-	provider, ok := r.outbound.(interface{ TrafficStats() core.TrafficStats })
-	if !ok {
+	if r.outbound == nil {
 		return core.TrafficStats{}, core.WrapError(core.ErrorCodeOutboundUnavailable, "traffic statistics are unavailable", true, nil)
 	}
-	return provider.TrafficStats(), nil
+	return r.outbound.TrafficStats()
 }
 
 func (r *Runtime) Connections() ([]core.ConnectionInfo, error) {
-	provider, ok := r.outbound.(interface{ Connections() []core.ConnectionInfo })
-	if !ok {
+	if r.outbound == nil {
 		return nil, core.WrapError(core.ErrorCodeOutboundUnavailable, "connection statistics are unavailable", true, nil)
 	}
-	return provider.Connections(), nil
+	return r.outbound.Connections()
 }
 
 func (r *Runtime) CloseConnection(id string) error {
-	provider, ok := r.outbound.(interface{ CloseConnection(string) error })
-	if !ok {
+	if r.outbound == nil {
 		return core.WrapError(core.ErrorCodeOutboundUnavailable, "connection control is unavailable", true, nil)
 	}
-	return provider.CloseConnection(id)
+	return r.outbound.CloseConnection(id)
 }
 
 func (r *Runtime) TransportConnections() ([]core.TransportConnectionInfo, error) {
-	provider, ok := r.outbound.(interface {
-		TransportConnections() []core.TransportConnectionInfo
-	})
-	if !ok {
+	if r.outbound == nil {
 		return nil, core.WrapError(core.ErrorCodeOutboundUnavailable, "transport connection statistics are unavailable", true, nil)
 	}
-	return provider.TransportConnections(), nil
+	return r.outbound.TransportConnections()
 }
 
 func (r *Runtime) Close() {
@@ -408,7 +398,7 @@ func startWithStageHandler(ctx context.Context, config Config, deps dependencies
 			runtime.Close()
 			return nil, core.WrapError(core.ErrorCodeNetworkSetupFailed, "setup VPN network runtime", false, fmt.Errorf("network runtime returned no outbound"))
 		}
-		runtime.outbound = outbound
+		runtime.outbound = wrapNetwork(outbound)
 		runtime.ownsOutbound = true
 	}
 

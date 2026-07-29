@@ -1,6 +1,7 @@
 package core
 
 type Config struct {
+	Protocol               string                 `json:"protocol,omitempty"`
 	ResumeState            *ResumeState           `json:"-"`
 	SessionID              SessionID              `json:"session_id,omitempty"`
 	ServerAddress          string                 `json:"server_address"`

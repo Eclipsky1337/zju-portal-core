@@ -164,6 +164,30 @@ func TestRuntimeStartsAndClosesConfiguredProxyServices(t *testing.T) {
 	}
 }
 
+func TestRuntimeStartsRegisteredInboundFactory(t *testing.T) {
+	custom := &serviceStub{address: testAddr("127.0.0.1:19090")}
+	config := Config{
+		RoutingMode: core.RoutingModeRule,
+		InboundFactories: []InboundFactory{{
+			Type:    core.ServiceType("custom"),
+			Enabled: func(Config) bool { return true },
+			New: func(Config, InboundDependencies) (Inbound, error) {
+				return custom, nil
+			}},
+		},
+	}
+	runtime, err := New(context.Background(), &clientStub{}, config)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	defer runtime.Close(context.Background())
+
+	statuses := runtime.Services()
+	if len(statuses) != 1 || statuses[0].Type != core.ServiceType("custom") || !statuses[0].Running {
+		t.Fatalf("Services() = %#v", statuses)
+	}
+}
+
 func TestRuntimeServiceStatusUsesLifecycleStateAndRecordsCloseError(t *testing.T) {
 	wantErr := errors.New("close proxy failed")
 	http := &serviceStub{closeErr: wantErr}

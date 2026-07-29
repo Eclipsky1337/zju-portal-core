@@ -304,14 +304,14 @@ func TestInstallReconnectedRuntimePreservesResourcesWhenRefreshFails(t *testing.
 	newOutbound := newHealthOutboundStub()
 	session := newSession("session-stale-resources", Config{}, deps)
 	session.state = core.SessionStateReconnecting
-	session.network = oldOutbound
+	session.network = wrapNetwork(oldOutbound)
 	session.resources = core.Resources{
 		ClientIP:        "10.0.0.2",
 		IPResources:     []core.IPResource{{IPMin: "10.0.0.1", IPMax: "10.0.0.255"}},
 		DomainResources: map[string]core.DomainResource{"example.edu": {Protocol: "tcp"}},
 		DNSRecords:      map[string]string{"app.example.edu": "10.0.0.8"},
 	}
-	candidate := &Runtime{client: &atrustclient.Client{}, outbound: newOutbound, ownsOutbound: true}
+	candidate := &Runtime{client: &atrustclient.Client{}, outbound: wrapNetwork(newOutbound), ownsOutbound: true}
 
 	if !session.installReconnectedRuntime(context.Background(), candidate) {
 		t.Fatal("installReconnectedRuntime() = false")
@@ -510,7 +510,7 @@ func TestManagedSessionRefreshNetworkFailurePreservesResourcesAndClient(t *testi
 
 func TestMonitorRuntimeContinuesAfterVPNReplacement(t *testing.T) {
 	outbound := newHealthOutboundStub()
-	runtime := &Runtime{outbound: outbound}
+	runtime := &Runtime{outbound: wrapNetwork(outbound)}
 	session := newSession("session-monitor-replacement", Config{DisableAutoReconnect: true}, defaultDependencies())
 	session.state = core.SessionStateReady
 	ctx, cancel := context.WithCancel(context.Background())

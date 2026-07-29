@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net"
 	"sync"
-	"time"
 
 	"github.com/Eclipsky1337/zju-portal-core/client"
 	"github.com/Eclipsky1337/zju-portal-core/core"
@@ -52,11 +51,7 @@ type Config struct {
 	newDNSService        func(string, service.DNSResolver) managedService
 	newTUNService        func(TUNConfig, core.Outbound, core.ConnectionObserver) (managedService, error)
 	newInternetOutbound  func(core.InternetOutboundConfig) (core.Outbound, error)
-}
-
-type managedService interface {
-	core.Component
-	Addr() net.Addr
+	InboundFactories     []InboundFactory
 }
 
 type serviceEntry struct {
@@ -379,81 +374,23 @@ func (runtime *Runtime) Services() []core.ServiceStatus {
 func (runtime *Runtime) ServiceEvents() <-chan core.ServiceStatus { return runtime.serviceEvents }
 
 func (runtime *Runtime) startServices(ctx context.Context, config Config) error {
-	if config.DNSBind != "" {
-		factory := config.newDNSService
-		if factory == nil {
-			factory = func(bind string, resolver service.DNSResolver) managedService {
-				return service.NewManagedDNSService(bind, resolver)
-			}
+	factories := append(defaultInboundFactories(), config.InboundFactories...)
+	dependencies := InboundDependencies{Outbound: runtime.outbound, Resolver: runtime.resolver, Observer: runtime.connections}
+	for _, factory := range factories {
+		if factory.Enabled == nil || factory.New == nil || !factory.Enabled(config) {
+			continue
 		}
-		server := factory(config.DNSBind, runtime.resolver)
-		entry := runtime.addService(core.ServiceTypeDNS, server)
-		if err := server.Start(ctx); err != nil {
-			entry.markStopped(err)
-			return wrapServiceStartError(core.ServiceTypeDNS, err)
-		}
-		entry.markStarted()
-		runtime.monitorService(entry)
-	}
-	if config.TUNEnabled {
-		factory := config.newTUNService
-		if factory == nil {
-			factory = newTUNService
-		}
-		server, err := factory(TUNConfig{
-			Name:              config.TUNName,
-			Address:           config.TUNAddress,
-			MTU:               config.TUNMTU,
-			AutoRoute:         config.TUNAutoRoute,
-			StrictRoute:       config.TUNStrictRoute,
-			Stack:             config.TUNStack,
-			UDPTimeout:        time.Duration(config.TUNUDPTimeoutSeconds) * time.Second,
-			UDPMaxFlows:       config.TUNUDPMaxFlows,
-			DNSHijack:         config.TUNDNSHijack,
-			FakeIP:            config.TUNFakeIP,
-			FakeIPRange:       config.TUNFakeIPRange,
-			Resolver:          runtime.resolver,
-			OutboundInterface: config.TUNOutboundInterface,
-		}, runtime.outbound, runtime.connections)
+		server, err := factory.New(config, dependencies)
 		if err != nil {
-			return wrapServiceStartError(core.ServiceTypeTUN, err)
+			return wrapServiceStartError(factory.Type, err)
 		}
-		entry := runtime.addService(core.ServiceTypeTUN, server)
+		if server == nil {
+			return wrapServiceStartError(factory.Type, errors.New("inbound factory returned no service"))
+		}
+		entry := runtime.addService(factory.Type, server)
 		if err := server.Start(ctx); err != nil {
 			entry.markStopped(err)
-			return wrapServiceStartError(core.ServiceTypeTUN, err)
-		}
-		entry.markStarted()
-		runtime.monitorService(entry)
-	}
-	if config.SOCKSBind != "" {
-		factory := config.newSOCKS5Service
-		if factory == nil {
-			factory = func(bind string, outbound core.Outbound, resolver socks5.NameResolver, username, password string) managedService {
-				return service.NewSocks5ServiceWithObserver(bind, outbound, resolver, username, password, runtime.connections)
-			}
-		}
-		server := factory(config.SOCKSBind, runtime.outbound, runtime.resolver, config.SOCKSUsername, config.SOCKSPassword)
-		entry := runtime.addService(core.ServiceTypeSOCKS5, server)
-		if err := server.Start(ctx); err != nil {
-			entry.markStopped(err)
-			return wrapServiceStartError(core.ServiceTypeSOCKS5, err)
-		}
-		entry.markStarted()
-		runtime.monitorService(entry)
-	}
-	if config.HTTPBind != "" {
-		factory := config.newHTTPService
-		if factory == nil {
-			factory = func(bind string, outbound core.Outbound) managedService {
-				return service.NewHTTPServiceWithObserver(bind, outbound, runtime.connections)
-			}
-		}
-		server := factory(config.HTTPBind, runtime.outbound)
-		entry := runtime.addService(core.ServiceTypeHTTP, server)
-		if err := server.Start(ctx); err != nil {
-			entry.markStopped(err)
-			return wrapServiceStartError(core.ServiceTypeHTTP, err)
+			return wrapServiceStartError(factory.Type, err)
 		}
 		entry.markStarted()
 		runtime.monitorService(entry)

@@ -6,20 +6,14 @@ import (
 	"github.com/Eclipsky1337/zju-portal-core/core"
 )
 
-type routingRuntime interface {
-	RoutingMode() core.RoutingMode
-	SetRoutingMode(core.RoutingMode) (core.RoutingMode, error)
-}
-
 func (s *Session) RoutingMode() (core.RoutingMode, error) {
 	s.mu.RLock()
 	network := s.network
 	s.mu.RUnlock()
-	provider, ok := network.(routingRuntime)
-	if !ok {
+	if network == nil {
 		return "", core.WrapError(core.ErrorCodeOutboundUnavailable, "routing mode is unavailable", true, nil)
 	}
-	return provider.RoutingMode(), nil
+	return network.RoutingMode()
 }
 
 func (s *Session) SetRoutingMode(mode core.RoutingMode) error {
@@ -29,11 +23,10 @@ func (s *Session) SetRoutingMode(mode core.RoutingMode) error {
 	s.mu.RLock()
 	network := s.network
 	s.mu.RUnlock()
-	provider, ok := network.(routingRuntime)
-	if !ok {
+	if network == nil {
 		return core.WrapError(core.ErrorCodeOutboundUnavailable, "routing mode is unavailable", true, nil)
 	}
-	previous, err := provider.SetRoutingMode(mode)
+	previous, err := network.SetRoutingMode(mode)
 	if err != nil {
 		return core.WrapError(core.ErrorCodeInvalidRequest, "set routing mode", false, err)
 	}

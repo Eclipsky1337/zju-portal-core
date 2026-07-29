@@ -3,12 +3,73 @@ package manager
 import (
 	"context"
 	"errors"
+	"net"
 	"reflect"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/Eclipsky1337/zju-portal-core/core"
 )
+
+type sessionStub struct {
+	id        core.SessionID
+	started   func() error
+	closed    func() error
+	state     core.SessionState
+	events    chan core.Event
+	closeOnce sync.Once
+}
+
+func newSessionStub(id core.SessionID) *sessionStub {
+	return &sessionStub{id: id, state: core.SessionStateIdle, events: make(chan core.Event)}
+}
+
+func (session *sessionStub) ID() core.SessionID { return session.id }
+func (session *sessionStub) Start(context.Context) error {
+	if session.started != nil {
+		if err := session.started(); err != nil {
+			return err
+		}
+	}
+	session.state = core.SessionStateReady
+	return nil
+}
+func (session *sessionStub) Close(context.Context) (core.CleanupReport, error) {
+	var err error
+	session.closeOnce.Do(func() {
+		if session.closed != nil {
+			err = session.closed()
+		}
+		session.state = core.SessionStateStopped
+		close(session.events)
+	})
+	return core.CleanupReport{}, err
+}
+func (*sessionStub) WaitClosed(context.Context) error { return nil }
+func (session *sessionStub) Status() core.SessionStatus {
+	return core.SessionStatus{ID: session.id, State: session.state}
+}
+func (*sessionStub) Resources() (core.Resources, error)                            { return core.Resources{}, nil }
+func (*sessionStub) RefreshResources(context.Context) error                        { return nil }
+func (*sessionStub) Outbound() (core.Outbound, error)                              { return outboundSessionStub{}, nil }
+func (*sessionStub) Services() ([]core.ServiceStatus, error)                       { return nil, nil }
+func (*sessionStub) TrafficStats() (core.TrafficStats, error)                      { return core.TrafficStats{}, nil }
+func (*sessionStub) Connections() ([]core.ConnectionInfo, error)                   { return nil, nil }
+func (*sessionStub) CloseConnection(string) error                                  { return nil }
+func (*sessionStub) TransportConnections() ([]core.TransportConnectionInfo, error) { return nil, nil }
+func (*sessionStub) RoutingMode() (core.RoutingMode, error)                        { return core.RoutingModeRule, nil }
+func (*sessionStub) SetRoutingMode(core.RoutingMode) error                         { return nil }
+func (*sessionStub) ResumeState() (core.ResumeState, error)                        { return core.ResumeState{}, nil }
+func (session *sessionStub) Events() <-chan core.Event                             { return session.events }
+
+type outboundSessionStub struct{}
+
+func (outboundSessionStub) DialContext(context.Context, string, string) (net.Conn, error) {
+	return nil, errors.New("not implemented")
+}
+func (outboundSessionStub) Close(context.Context) error { return nil }
 
 func TestAuthBrokerPublishesChallengeAndAcceptsResponse(t *testing.T) {
 	events := make(chan core.Event, 2)
@@ -208,5 +269,93 @@ func TestRefreshResourcesRejectsUnknownSession(t *testing.T) {
 	_, err := manager.RefreshResources(context.Background(), "missing")
 	if code := core.ErrorCodeOf(err); code != core.ErrorCodeSessionNotFound {
 		t.Fatalf("RefreshResources() error code = %q, error = %v", code, err)
+	}
+}
+
+func TestManagerReplacesTheProcessSessionSerially(t *testing.T) {
+	var closeCount atomic.Int32
+	var replacementStartedEarly atomic.Bool
+	var factoryCalls atomic.Int32
+	manager := New(WithProtocol("stub", func(id core.SessionID, _ core.Config, _ core.AuthHandler) (Session, error) {
+		session := newSessionStub(id)
+		call := factoryCalls.Add(1)
+		if call == 1 {
+			session.closed = func() error {
+				closeCount.Add(1)
+				return nil
+			}
+		} else {
+			session.started = func() error {
+				if closeCount.Load() != 1 {
+					replacementStartedEarly.Store(true)
+				}
+				return nil
+			}
+		}
+		return session, nil
+	}))
+	defer manager.Close(context.Background())
+
+	if _, err := manager.Start(context.Background(), core.Config{Protocol: "stub", SessionID: "first"}); err != nil {
+		t.Fatalf("first Start() error = %v", err)
+	}
+	if _, err := manager.Start(context.Background(), core.Config{Protocol: "stub", SessionID: "second"}); err != nil {
+		t.Fatalf("second Start() error = %v", err)
+	}
+	if replacementStartedEarly.Load() {
+		t.Fatal("replacement started before the previous session closed")
+	}
+	if status := manager.Status("first"); status.ID != "" {
+		t.Fatalf("replaced session remains addressable: %#v", status)
+	}
+	if status := manager.Status("second"); status.State != core.SessionStateReady {
+		t.Fatalf("active status = %#v", status)
+	}
+}
+
+func TestManagerSerializesConcurrentStarts(t *testing.T) {
+	var running atomic.Int32
+	var concurrent atomic.Bool
+	manager := New(WithProtocol("stub", func(id core.SessionID, _ core.Config, _ core.AuthHandler) (Session, error) {
+		session := newSessionStub(id)
+		session.started = func() error {
+			if running.Add(1) != 1 {
+				concurrent.Store(true)
+			}
+			time.Sleep(10 * time.Millisecond)
+			running.Add(-1)
+			return nil
+		}
+		return session, nil
+	}))
+	defer manager.Close(context.Background())
+
+	var waitGroup sync.WaitGroup
+	errs := make(chan error, 2)
+	for _, id := range []core.SessionID{"first", "second"} {
+		waitGroup.Add(1)
+		go func(id core.SessionID) {
+			defer waitGroup.Done()
+			_, err := manager.Start(context.Background(), core.Config{Protocol: "stub", SessionID: id})
+			errs <- err
+		}(id)
+	}
+	waitGroup.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("Start() error = %v", err)
+		}
+	}
+	if concurrent.Load() {
+		t.Fatal("sessions started concurrently")
+	}
+}
+
+func TestManagerRejectsUnregisteredProtocol(t *testing.T) {
+	manager := New()
+	_, err := manager.Start(context.Background(), core.Config{Protocol: "missing"})
+	if code := core.ErrorCodeOf(err); code != core.ErrorCodeConfigInvalid {
+		t.Fatalf("Start() error code = %q, error = %v", code, err)
 	}
 }

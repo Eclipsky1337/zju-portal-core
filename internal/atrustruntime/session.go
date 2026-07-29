@@ -28,7 +28,7 @@ type Session struct {
 	state         core.SessionState
 	lastError     *core.Error
 	runtime       *Runtime
-	network       core.Outbound
+	network       *networkSession
 	cancel        context.CancelFunc
 	stageErr      error
 	resources     core.Resources
@@ -55,6 +55,14 @@ func newSession(id core.SessionID, config Config, deps dependencies) *Session {
 	}
 }
 
+func NewSession(id core.SessionID, config Config) *Session {
+	return newSession(id, config, defaultDependencies())
+}
+
+func (s *Session) ID() core.SessionID {
+	return s.id
+}
+
 func (s *Session) waitRuntimeClosed(ctx context.Context) error {
 	s.mu.RLock()
 	runtime := s.runtime
@@ -68,6 +76,10 @@ func (s *Session) waitRuntimeClosed(ctx context.Context) error {
 		closeErrors = append(closeErrors, runtime.CloseContext(ctx))
 	}
 	return errors.Join(closeErrors...)
+}
+
+func (s *Session) WaitClosed(ctx context.Context) error {
+	return s.waitRuntimeClosed(ctx)
 }
 
 func (s *Session) Start(ctx context.Context) error {
@@ -168,18 +180,15 @@ func (s *Session) monitorRuntime(ctx context.Context, runtime *Runtime) {
 	}
 }
 
-func (s *Session) monitorServiceEvents(ctx context.Context, network core.Outbound) {
-	provider, ok := network.(interface {
-		ServiceEvents() <-chan core.ServiceStatus
-	})
-	if !ok || provider.ServiceEvents() == nil {
+func (s *Session) monitorServiceEvents(ctx context.Context, network *networkSession) {
+	if network == nil || network.ServiceEvents() == nil {
 		return
 	}
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case status, ok := <-provider.ServiceEvents():
+		case status, ok := <-network.ServiceEvents():
 			if !ok {
 				return
 			}
@@ -256,7 +265,7 @@ func (s *Session) reconnectConfig(runtime *Runtime) Config {
 	s.mu.RLock()
 	network := s.network
 	s.mu.RUnlock()
-	if existing, ok := network.(replaceableNetworkRuntime); ok {
+	if existing, ok := network.replaceable(); ok {
 		config.NetworkRuntime = existing
 	}
 	if config.ClientDataFile != "" {
@@ -309,7 +318,7 @@ func (s *Session) installReconnectedRuntime(ctx context.Context, runtime *Runtim
 	s.state = core.SessionStateReady
 	s.lastError = nil
 	s.mu.Unlock()
-	if oldNetwork != nil && oldNetwork != network {
+	if oldNetwork != nil && !oldNetwork.same(network) {
 		_ = oldNetwork.Close(context.Background())
 	}
 
@@ -504,7 +513,8 @@ func (s *Session) RefreshResources(ctx context.Context) error {
 		return core.WrapError(core.ErrorCodeSessionNotReady, fmt.Sprintf("session %q is not ready", s.id), true, nil)
 	}
 	runtime := s.runtime
-	network, replaceable := s.network.(replaceableNetworkRuntime)
+	network := s.network
+	replaceableNetwork, replaceable := network.replaceable()
 	s.mu.RUnlock()
 	if !replaceable {
 		return core.WrapError(core.ErrorCodeOutboundUnavailable, "session network runtime cannot refresh VPN resources", false, nil)
@@ -512,7 +522,7 @@ func (s *Session) RefreshResources(ctx context.Context) error {
 
 	config := s.reconnectConfig(runtime)
 	config.SetupNetwork = false
-	config.NetworkRuntime = network
+	config.NetworkRuntime = replaceableNetwork
 	var selectedNodes map[string]string
 	var selectedNodesMu sync.Mutex
 	active := false
@@ -542,16 +552,17 @@ func (s *Session) RefreshResources(ctx context.Context) error {
 		s.mu.Unlock()
 		return core.WrapError(core.ErrorCodeSessionNotReady, fmt.Sprintf("session %q changed while refreshing resources", s.id), true, nil)
 	}
-	refreshedNetwork, err := s.deps.setupNetwork(ctx, candidate.Client(), config)
+	refreshedOutbound, err := s.deps.setupNetwork(ctx, candidate.Client(), config)
 	if err != nil {
 		s.mu.Unlock()
 		return err
 	}
-	if refreshedNetwork == nil {
+	if refreshedOutbound == nil {
 		s.mu.Unlock()
 		return core.WrapError(core.ErrorCodeOutboundUnavailable, "refreshed network runtime is unavailable", true, nil)
 	}
-	if refreshedNetwork != network {
+	refreshedNetwork := wrapNetwork(refreshedOutbound)
+	if !refreshedNetwork.same(network) {
 		s.mu.Unlock()
 		_ = refreshedNetwork.Close(context.Background())
 		return core.WrapError(core.ErrorCodeOutboundUnavailable, "resource refresh replaced the stable network runtime", false, nil)
@@ -592,7 +603,7 @@ func (s *Session) Outbound() (core.Outbound, error) {
 	if state == core.SessionStateStopping || state == core.SessionStateStopped || network == nil {
 		return nil, core.WrapError(core.ErrorCodeOutboundUnavailable, "session outbound is unavailable", true, nil)
 	}
-	return network, nil
+	return network.outbound, nil
 }
 
 func (s *Session) Services() ([]core.ServiceStatus, error) {
@@ -600,11 +611,7 @@ func (s *Session) Services() ([]core.ServiceStatus, error) {
 	if err != nil {
 		return nil, err
 	}
-	provider, ok := network.(interface{ Services() []core.ServiceStatus })
-	if !ok {
-		return nil, core.WrapError(core.ErrorCodeOutboundUnavailable, "session runtime is unavailable", true, nil)
-	}
-	return provider.Services(), nil
+	return network.Services()
 }
 
 func (s *Session) handleNodeSelection(nodes map[string]string) {
@@ -635,7 +642,7 @@ func (s *Session) emitSelectedNodes() {
 	}
 }
 
-func (s *Session) emitServiceEvents(network core.Outbound, eventType core.EventType) {
+func (s *Session) emitServiceEvents(network *networkSession, eventType core.EventType) {
 	for _, status := range serviceStatuses(network) {
 		if eventType == core.EventTypeServiceStarted && !status.Running {
 			continue
@@ -644,12 +651,12 @@ func (s *Session) emitServiceEvents(network core.Outbound, eventType core.EventT
 	}
 }
 
-func serviceStatuses(network core.Outbound) []core.ServiceStatus {
-	provider, ok := network.(interface{ Services() []core.ServiceStatus })
-	if !ok {
+func serviceStatuses(network *networkSession) []core.ServiceStatus {
+	if network == nil {
 		return nil
 	}
-	return provider.Services()
+	services, _ := network.Services()
+	return services
 }
 
 func mergeStoppedServiceStatuses(before, after []core.ServiceStatus) []core.ServiceStatus {

@@ -71,6 +71,35 @@ func (outboundSessionStub) DialContext(context.Context, string, string) (net.Con
 }
 func (outboundSessionStub) Close(context.Context) error { return nil }
 
+func TestManagerSessionEventForwardingDoesNotBlockWithoutConsumer(t *testing.T) {
+	manager := New()
+	session := newSessionStub("session-event-backpressure")
+	session.events = make(chan core.Event, managerEventBuffer*2)
+	for index := 0; index < managerEventBuffer*2-1; index++ {
+		session.events <- core.Event{SessionID: session.id, Type: core.EventTypeLog}
+	}
+	session.events <- core.Event{SessionID: session.id, Type: core.EventTypeShutdownCompleted}
+
+	done := make(chan struct{})
+	go func() {
+		manager.forwardSessionEvents(session)
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("session event forwarding blocked on full manager event buffer")
+	}
+	if len(manager.events) > managerEventBuffer-managerAuthEventReserve {
+		t.Fatalf("manager telemetry used authentication reserve: %d events", len(manager.events))
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := manager.auth.emit(ctx, core.Event{SessionID: session.id, Type: core.EventTypeAuthRequired}); err != nil {
+		t.Fatalf("authentication event emission failed: %v", err)
+	}
+}
+
 func TestAuthBrokerPublishesChallengeAndAcceptsResponse(t *testing.T) {
 	events := make(chan core.Event, 2)
 	broker := newAuthBroker(events)

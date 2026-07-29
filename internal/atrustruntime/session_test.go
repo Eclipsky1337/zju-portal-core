@@ -854,6 +854,32 @@ func TestManagedSessionCloseIsConcurrentAndIdempotent(t *testing.T) {
 	}
 }
 
+func TestSessionEventDeliveryDoesNotBlockWhenBufferIsFull(t *testing.T) {
+	session := newSession("session-event-backpressure", Config{}, defaultDependencies())
+	done := make(chan struct{})
+	go func() {
+		for index := 0; index < sessionEventBuffer*2; index++ {
+			session.emit(core.Event{SessionID: session.id, Type: core.EventTypeLog})
+		}
+		session.emit(core.Event{SessionID: session.id, Type: core.EventTypeShutdownCompleted})
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("event producer blocked on full session event buffer")
+	}
+	foundShutdown := false
+	for len(session.events) != 0 {
+		if event := <-session.events; event.Type == core.EventTypeShutdownCompleted {
+			foundShutdown = true
+		}
+	}
+	if !foundShutdown {
+		t.Fatal("latest shutdown event was not retained")
+	}
+}
+
 func TestManagedSessionCleansPartialStartupOnce(t *testing.T) {
 	wantErr := errors.New("tunnel setup failed")
 	deps := defaultDependencies()

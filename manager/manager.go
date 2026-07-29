@@ -11,7 +11,10 @@ import (
 	"github.com/Eclipsky1337/zju-portal-core/internal/atrustruntime"
 )
 
-const managerEventBuffer = 128
+const (
+	managerEventBuffer      = 128
+	managerAuthEventReserve = 8
+)
 
 const ProtocolATrust = "atrust"
 
@@ -258,10 +261,20 @@ func (manager *Manager) Events() <-chan core.Event {
 
 func (manager *Manager) forwardSessionEvents(session Session) {
 	for event := range session.Events() {
-		manager.events <- event
+		manager.emitSessionEvent(event)
 		if event.Type == core.EventTypeShutdownCompleted {
 			return
 		}
+	}
+}
+
+func (manager *Manager) emitSessionEvent(event core.Event) {
+	if len(manager.events) >= cap(manager.events)-managerAuthEventReserve {
+		return
+	}
+	select {
+	case manager.events <- event:
+	default:
 	}
 }
 

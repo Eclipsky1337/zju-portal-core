@@ -36,7 +36,8 @@ type Session struct {
 	selectedNodes map[string]string
 	resumeState   core.ResumeState
 
-	events chan core.Event
+	eventMu sync.Mutex
+	events  chan core.Event
 
 	startOnce   sync.Once
 	startErr    error
@@ -152,9 +153,9 @@ func (s *Session) start(ctx context.Context) error {
 	s.emitServiceEvents(network, core.EventTypeServiceStarted)
 	if resumeState.Data != "" {
 		if s.config.ResumeState != nil && !resumeState.Reused {
-			s.events <- core.NewResumeStateInvalidatedEvent(s.id, s.config.ResumeState.Revision, time.Now())
+			s.emit(core.NewResumeStateInvalidatedEvent(s.id, s.config.ResumeState.Revision, time.Now()))
 		}
-		s.events <- core.NewResumeStateUpdatedEvent(s.id, resumeState.Revision, resumeState.Reused, time.Now())
+		s.emit(core.NewResumeStateUpdatedEvent(s.id, resumeState.Revision, resumeState.Reused, time.Now()))
 	}
 
 	go s.closeWhenCanceled(sessionCtx)
@@ -216,7 +217,7 @@ func (s *Session) monitorServiceEvents(ctx context.Context, network *networkSess
 			if !ok {
 				return
 			}
-			s.events <- core.NewServiceEvent(s.id, core.EventTypeServiceStopped, status, time.Now())
+			s.emit(core.NewServiceEvent(s.id, core.EventTypeServiceStopped, status, time.Now()))
 		}
 	}
 }
@@ -236,13 +237,13 @@ func (s *Session) reconnect(ctx context.Context, failedRuntime *Runtime, runtime
 
 	for attempt := 1; ; attempt++ {
 		delay := reconnectDelay(attempt)
-		s.events <- core.Event{
+		s.emit(core.Event{
 			SessionID: s.id,
 			Type:      core.EventTypeReconnectScheduled,
 			Timestamp: time.Now(),
 			Error:     asCoreError(core.ErrorCodeSessionReconnectFailed, "VPN network runtime stopped", runtimeErr),
 			Reconnect: &core.ReconnectInfo{Attempt: attempt, DelayMillis: delay.Milliseconds()},
-		}
+		})
 		if err := s.deps.wait(ctx, delay); err != nil {
 			return nil
 		}
@@ -253,13 +254,13 @@ func (s *Session) reconnect(ctx context.Context, failedRuntime *Runtime, runtime
 			s.mu.Lock()
 			s.lastError = coreError
 			s.mu.Unlock()
-			s.events <- core.Event{
+			s.emit(core.Event{
 				SessionID: s.id,
 				Type:      core.EventTypeReconnectFailed,
 				Timestamp: time.Now(),
 				Error:     coreError,
 				Reconnect: &core.ReconnectInfo{Attempt: attempt},
-			}
+			})
 			continue
 		}
 
@@ -269,16 +270,16 @@ func (s *Session) reconnect(ctx context.Context, failedRuntime *Runtime, runtime
 		}
 		if resumeState, err := candidate.ResumeState(); err == nil {
 			if config.ResumeState != nil && !resumeState.Reused {
-				s.events <- core.NewResumeStateInvalidatedEvent(s.id, config.ResumeState.Revision, time.Now())
+				s.emit(core.NewResumeStateInvalidatedEvent(s.id, config.ResumeState.Revision, time.Now()))
 			}
-			s.events <- core.NewResumeStateUpdatedEvent(s.id, resumeState.Revision, resumeState.Reused, time.Now())
+			s.emit(core.NewResumeStateUpdatedEvent(s.id, resumeState.Revision, resumeState.Reused, time.Now()))
 		}
-		s.events <- core.Event{
+		s.emit(core.Event{
 			SessionID: s.id,
 			Type:      core.EventTypeReconnected,
 			Timestamp: time.Now(),
 			Reconnect: &core.ReconnectInfo{Attempt: attempt},
-		}
+		})
 		return candidate
 	}
 }
@@ -346,7 +347,7 @@ func (s *Session) installReconnectedRuntime(ctx context.Context, runtime *Runtim
 		_ = oldNetwork.Close(context.Background())
 	}
 
-	s.events <- core.NewStateChangedEvent(s.id, previous, core.SessionStateReady, time.Now())
+	s.emit(core.NewStateChangedEvent(s.id, previous, core.SessionStateReady, time.Now()))
 	if resourceErr == nil {
 		s.emitResourcesUpdated(resources)
 	}
@@ -416,7 +417,7 @@ func (s *Session) transition(next core.SessionState) error {
 	s.state = next
 	s.mu.Unlock()
 
-	s.events <- core.NewStateChangedEvent(s.id, previous, next, time.Now())
+	s.emit(core.NewStateChangedEvent(s.id, previous, next, time.Now()))
 	return nil
 }
 
@@ -433,12 +434,12 @@ func (s *Session) failWith(code core.ErrorCode, message string, err error) {
 	if state != core.SessionStateStopping && state != core.SessionStateStopped && state != core.SessionStateFailed {
 		_ = s.transition(core.SessionStateFailed)
 	}
-	s.events <- core.Event{
+	s.emit(core.Event{
 		SessionID: s.id,
 		Type:      core.EventTypeSessionError,
 		Timestamp: time.Now(),
 		Error:     coreError,
-	}
+	})
 }
 
 func (s *Session) Close(ctx context.Context) (core.CleanupReport, error) {
@@ -496,7 +497,7 @@ func (s *Session) close(ctx context.Context) (core.CleanupReport, error) {
 	}
 	services = mergeStoppedServiceStatuses(services, serviceStatuses(network))
 	for _, status := range services {
-		s.events <- core.NewServiceEvent(s.id, core.EventTypeServiceStopped, status, time.Now())
+		s.emit(core.NewServiceEvent(s.id, core.EventTypeServiceStopped, status, time.Now()))
 	}
 	report.Results = append(report.Results, result)
 
@@ -509,12 +510,12 @@ func (s *Session) close(ctx context.Context) (core.CleanupReport, error) {
 		}
 	}
 	report.CompletedAt = time.Now()
-	s.events <- core.Event{
+	s.emit(core.Event{
 		SessionID: s.id,
 		Type:      core.EventTypeShutdownCompleted,
 		Timestamp: report.CompletedAt,
 		Cleanup:   &report,
-	}
+	})
 	return report, closeErr
 }
 
@@ -526,6 +527,21 @@ func (s *Session) Status() core.SessionStatus {
 
 func (s *Session) Events() <-chan core.Event {
 	return s.events
+}
+
+func (s *Session) emit(event core.Event) {
+	s.eventMu.Lock()
+	defer s.eventMu.Unlock()
+	select {
+	case s.events <- event:
+		return
+	default:
+	}
+	select {
+	case <-s.events:
+	default:
+	}
+	s.events <- event
 }
 
 func (s *Session) Client() clientpkg.Client {
@@ -618,13 +634,13 @@ func (s *Session) RefreshResources(ctx context.Context) error {
 
 	s.emitResourcesUpdated(resources)
 	if len(nodes) != 0 {
-		s.events <- core.NewNodeSelectedEvent(s.id, nodes, time.Now())
+		s.emit(core.NewNodeSelectedEvent(s.id, nodes, time.Now()))
 	}
 	if resumeState.Data != "" {
 		if config.ResumeState != nil && !resumeState.Reused {
-			s.events <- core.NewResumeStateInvalidatedEvent(s.id, config.ResumeState.Revision, time.Now())
+			s.emit(core.NewResumeStateInvalidatedEvent(s.id, config.ResumeState.Revision, time.Now()))
 		}
-		s.events <- core.NewResumeStateUpdatedEvent(s.id, resumeState.Revision, resumeState.Reused, time.Now())
+		s.emit(core.NewResumeStateUpdatedEvent(s.id, resumeState.Revision, resumeState.Reused, time.Now()))
 	}
 	return nil
 }
@@ -656,7 +672,7 @@ func (s *Session) handleNodeSelection(nodes map[string]string) {
 	ready := s.state == core.SessionStateReady
 	s.mu.Unlock()
 	if changed && ready {
-		s.events <- core.NewNodeSelectedEvent(s.id, nodes, time.Now())
+		s.emit(core.NewNodeSelectedEvent(s.id, nodes, time.Now()))
 	}
 }
 
@@ -664,7 +680,7 @@ func (s *Session) emitResourcesUpdated(resources core.Resources) {
 	if resources.IPResources == nil && resources.DomainResources == nil && resources.DNSRecords == nil {
 		return
 	}
-	s.events <- core.NewResourcesUpdatedEvent(s.id, resources, time.Now())
+	s.emit(core.NewResourcesUpdatedEvent(s.id, resources, time.Now()))
 }
 
 func (s *Session) emitSelectedNodes() {
@@ -672,7 +688,7 @@ func (s *Session) emitSelectedNodes() {
 	nodes := cloneMap(s.selectedNodes)
 	s.mu.RUnlock()
 	if len(nodes) != 0 {
-		s.events <- core.NewNodeSelectedEvent(s.id, nodes, time.Now())
+		s.emit(core.NewNodeSelectedEvent(s.id, nodes, time.Now()))
 	}
 }
 
@@ -681,7 +697,7 @@ func (s *Session) emitServiceEvents(network *networkSession, eventType core.Even
 		if eventType == core.EventTypeServiceStarted && !status.Running {
 			continue
 		}
-		s.events <- core.NewServiceEvent(s.id, eventType, status, time.Now())
+		s.emit(core.NewServiceEvent(s.id, eventType, status, time.Now()))
 	}
 }
 

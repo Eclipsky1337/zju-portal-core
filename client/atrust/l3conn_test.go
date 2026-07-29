@@ -8,22 +8,22 @@ import (
 	"time"
 )
 
-func TestL3TunnelPropagatesActiveTransportFailure(t *testing.T) {
+func TestL3TunnelEvictsActiveTransportFailureWithoutTerminating(t *testing.T) {
 	tunnel := newL3TunnelForLifecycleTest()
 	transport := newL3TransportForLifecycleTest()
 	tunnel.conns["group-main"] = transport
-	logical, err := tunnel.NewL3Conn()
-	if err != nil {
-		t.Fatal(err)
-	}
 
 	wantErr := errors.New("transport failed")
 	transport.fail(wantErr)
-	go tunnel.forwardFromConn("group-main", transport)
-
-	buffer := make([]byte, 1)
-	if _, err := logical.Read(buffer); !errors.Is(err, wantErr) {
-		t.Fatalf("Read() error = %v, want %v", err, wantErr)
+	tunnel.forwardFromConn("group-main", transport)
+	if err := connectionContextError(tunnel.ctx); err != nil {
+		t.Fatalf("active transport terminated tunnel: %v", err)
+	}
+	tunnel.connsMu.Lock()
+	remaining := tunnel.conns["group-main"]
+	tunnel.connsMu.Unlock()
+	if remaining != nil {
+		t.Fatal("failed active transport was not evicted")
 	}
 }
 

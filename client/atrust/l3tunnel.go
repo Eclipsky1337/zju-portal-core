@@ -161,9 +161,7 @@ func (t *L3Tunnel) forwardFromConn(nodeGroupID string, conn *l3TunnelConn) {
 	for {
 		pkt, err := conn.ReadPacket()
 		if err != nil {
-			if t.evictConn(nodeGroupID, conn) {
-				t.terminate(err)
-			}
+			t.evictConn(nodeGroupID, conn)
 			return
 		}
 		logPacket("recv", pkt)

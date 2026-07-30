@@ -39,7 +39,7 @@ func TestServerProcessesAuthResponseWhileSessionStartWaits(t *testing.T) {
 	manager := newManagerStub()
 	server := NewServer(manager, "test", []string{"atrust"})
 	requests := strings.NewReader(
-		"{\"id\":1,\"method\":\"session.start\",\"params\":{\"config\":{\"session_id\":\"session-1\",\"server_address\":\"vpn.example.edu\",\"server_port\":443}}}\n" +
+		"{\"id\":1,\"method\":\"session.start\",\"params\":{\"session_id\":\"session-1\"}}\n" +
 			"{\"id\":2,\"method\":\"auth.respond\",\"params\":{\"challenge_id\":\"sms-1\",\"value\":\"123456\"}}\n",
 	)
 	input := io.MultiReader(requests, waitForEOF{done: manager.startDone})
@@ -160,6 +160,14 @@ func (manager *managerStub) Start(ctx context.Context, config core.Config) (core
 		manager.startOnce.Do(func() { close(manager.startDone) })
 		return id, nil
 	}
+}
+
+func (manager *managerStub) StartSession(ctx context.Context, options core.SessionStartOptions) (core.SessionID, error) {
+	id := options.SessionID
+	if id == "" {
+		id = "default"
+	}
+	return manager.Start(ctx, core.Config{SessionID: id, ResumeState: options.ResumeState})
 }
 
 func (manager *managerStub) RespondAuth(ctx context.Context, response core.AuthResponse) error {
@@ -317,8 +325,8 @@ func TestServerFullControlFlow(t *testing.T) {
 		serveDone <- server.Serve(context.Background(), reader, &output)
 	}()
 
-	_, _ = io.WriteString(writer, "{\"id\":1,\"method\":\"hello\",\"params\":{\"protocol_version\":1}}\n")
-	_, _ = io.WriteString(writer, "{\"id\":2,\"method\":\"session.start\",\"params\":{\"config\":{\"session_id\":\"session-1\"}}}\n")
+	_, _ = io.WriteString(writer, "{\"id\":1,\"method\":\"hello\",\"params\":{\"protocol_version\":2}}\n")
+	_, _ = io.WriteString(writer, "{\"id\":2,\"method\":\"session.start\",\"params\":{\"session_id\":\"session-1\"}}\n")
 	<-manager.challengeSent
 	_, _ = io.WriteString(writer, "{\"id\":3,\"method\":\"auth.respond\",\"params\":{\"challenge_id\":\"sms-1\",\"value\":\"123456\"}}\n")
 	<-manager.startDone

@@ -11,11 +11,13 @@ func TestChangesClassifiesConfigurationFields(t *testing.T) {
 	configured := active.Clone()
 	configured.Session.AutoStart = !active.Session.AutoStart
 	configured.Routing.Mode = core.RoutingModeGlobal
+	configured.Log.Level = "debug"
 	configured.DNS.Remote.Server = "10.0.0.1"
 	configured.Inbounds.TUN.MTU = 1300
 
 	changes := Changes(active, configured)
 	want := map[string]ApplyRequirement{
+		"log.level":         ApplyRequirementCoreRestart,
 		"routing.mode":      ApplyRequirementLive,
 		"dns.remote.server": ApplyRequirementSessionRestart,
 		"inbounds.tun.mtu":  ApplyRequirementCoreRestart,

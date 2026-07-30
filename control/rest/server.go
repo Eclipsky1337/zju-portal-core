@@ -46,6 +46,7 @@ func NewServerContext(ctx context.Context, service *controlv1.Service, token str
 	server.mux.HandleFunc(APIBasePath+"/auth/responses", server.handleAuthResponse)
 	server.mux.HandleFunc(APIBasePath+"/events", server.handleEvents)
 	server.mux.HandleFunc(APIBasePath+"/config", server.handleConfig)
+	server.mux.HandleFunc(APIBasePath+"/config/apply", server.handleConfigApply)
 	server.mux.HandleFunc(APIBasePath+"/config/reload", server.handleConfigReload)
 	return server
 }
@@ -61,9 +62,29 @@ func (server *Server) handleConfig(writer http.ResponseWriter, request *http.Req
 		}
 		raw, _ := json.Marshal(params)
 		server.callContext(writer, server.lifecycleCtx, controlv1.MethodConfigSet, raw)
+	case http.MethodPatch:
+		var patch json.RawMessage
+		if err := decodeBody(writer, request, &patch); err != nil {
+			return
+		}
+		raw, _ := json.Marshal(controlv1.ConfigPatchParams{Patch: patch})
+		server.callContext(writer, server.lifecycleCtx, controlv1.MethodConfigPatch, raw)
 	default:
-		methodNotAllowed(writer, http.MethodGet, http.MethodPut)
+		methodNotAllowed(writer, http.MethodGet, http.MethodPut, http.MethodPatch)
 	}
+}
+
+func (server *Server) handleConfigApply(writer http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodPost {
+		methodNotAllowed(writer, http.MethodPost)
+		return
+	}
+	var params controlv1.ConfigApplyParams
+	if err := decodeBody(writer, request, &params); err != nil {
+		return
+	}
+	raw, _ := json.Marshal(params)
+	server.callContext(writer, server.lifecycleCtx, controlv1.MethodConfigApply, raw)
 }
 
 func (server *Server) handleConfigReload(writer http.ResponseWriter, request *http.Request) {

@@ -23,6 +23,20 @@ type ResumeState struct {
 	Reused    bool             `json:"reused"`
 }
 
+type ResumePolicy string
+
+const (
+	ResumePolicyAuto     ResumePolicy = "auto"
+	ResumePolicyNone     ResumePolicy = "none"
+	ResumePolicyProvided ResumePolicy = "provided"
+)
+
+type SessionStartOptions struct {
+	SessionID   SessionID
+	Resume      ResumePolicy
+	ResumeState *ResumeState
+}
+
 type Resources struct {
 	Stale           bool                      `json:"stale,omitempty"`
 	ClientIP        string                    `json:"client_ip,omitempty"`

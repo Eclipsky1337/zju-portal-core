@@ -2,7 +2,6 @@ package daemonruntime
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"reflect"
 	"sync"
@@ -17,11 +16,14 @@ type Controller struct {
 	configPath  string
 	operationMu sync.Mutex
 
-	mu          sync.RWMutex
-	config      daemonconfig.Config
-	initialized bool
-	tunConfig   daemonconfig.TUNConfig
-	resumeState *core.ResumeState
+	mu              sync.RWMutex
+	configured      daemonconfig.Config
+	active          daemonconfig.Config
+	revision        uint64
+	activeRevision  uint64
+	initialized     bool
+	activeSessionID core.SessionID
+	resumeState     *core.ResumeState
 }
 
 func New(manager core.Manager, configPath string) *Controller {
@@ -30,7 +32,7 @@ func New(manager core.Manager, configPath string) *Controller {
 
 func (controller *Controller) SetInitialResumeState(state *core.ResumeState) {
 	controller.mu.Lock()
-	controller.resumeState = state
+	controller.resumeState = cloneResumeState(state)
 	controller.mu.Unlock()
 }
 
@@ -40,163 +42,293 @@ func (controller *Controller) Initialize(ctx context.Context, config daemonconfi
 	if err := config.Validate(); err != nil {
 		return core.WrapError(core.ErrorCodeConfigInvalid, "validate configuration", false, err)
 	}
-	controller.mu.Lock()
-	if controller.initialized {
-		controller.mu.Unlock()
+	controller.mu.RLock()
+	initialized := controller.initialized
+	resumeState := cloneResumeState(controller.resumeState)
+	controller.mu.RUnlock()
+	if initialized {
 		return core.WrapError(core.ErrorCodeInvalidStateTransition, "configuration is already initialized", false, nil)
 	}
-	controller.mu.Unlock()
-	if err := controller.apply(ctx, config); err != nil {
-		return err
+
+	var activeSessionID core.SessionID
+	if config.Session.AutoStart {
+		coreConfig := config.CoreConfig()
+		if resumeStateMatchesConfig(resumeState, coreConfig) {
+			coreConfig.ResumeState = resumeState
+		}
+		id, err := controller.Manager.Start(ctx, coreConfig)
+		if err != nil {
+			return err
+		}
+		activeSessionID = id
 	}
+
 	controller.mu.Lock()
+	controller.configured = config.Clone()
+	controller.active = config.Clone()
+	controller.revision = 1
+	controller.activeRevision = 1
 	controller.initialized = true
-	controller.tunConfig = config.TUNConfig()
+	controller.activeSessionID = activeSessionID
 	controller.mu.Unlock()
+	zlog.Printf("Configuration initialized (version=%d, session=%s)", config.Version, config.Session.ID)
 	return nil
 }
 
-func (controller *Controller) Config() daemonconfig.Config {
+func (controller *Controller) ConfigSnapshot() daemonconfig.Snapshot {
 	controller.mu.RLock()
-	config := controller.config
+	snapshot := daemonconfig.Snapshot{
+		Revision:       controller.revision,
+		Configured:     controller.configured.Clone(),
+		Active:         controller.active.Clone(),
+		ActiveRevision: controller.activeRevision,
+	}
 	controller.mu.RUnlock()
-	return config.Clone()
+	snapshot.Pending = daemonconfig.Changes(snapshot.Active, snapshot.Configured)
+	return snapshot
 }
 
-func (controller *Controller) Start(ctx context.Context, config core.Config) (core.SessionID, error) {
+func (controller *Controller) SetConfig(ctx context.Context, config daemonconfig.Config) (daemonconfig.Snapshot, error) {
 	controller.operationMu.Lock()
 	defer controller.operationMu.Unlock()
+	return controller.setConfigLocked(ctx, config)
+}
+
+func (controller *Controller) PatchConfig(ctx context.Context, patch []byte) (daemonconfig.Snapshot, error) {
+	controller.operationMu.Lock()
+	defer controller.operationMu.Unlock()
+	controller.mu.RLock()
+	configured := controller.configured.Clone()
+	initialized := controller.initialized
+	controller.mu.RUnlock()
+	if !initialized {
+		return daemonconfig.Snapshot{}, core.WrapError(core.ErrorCodeConfigUnavailable, "configuration is not initialized", true, nil)
+	}
+	config, err := daemonconfig.MergeJSON(configured, patch)
+	if err != nil {
+		return daemonconfig.Snapshot{}, core.WrapError(core.ErrorCodeConfigInvalid, "merge configuration patch", false, err)
+	}
+	return controller.setConfigLocked(ctx, config)
+}
+
+func (controller *Controller) ReloadConfig(ctx context.Context) (daemonconfig.Snapshot, error) {
+	if controller.configPath == "" {
+		return daemonconfig.Snapshot{}, core.WrapError(core.ErrorCodeConfigUnavailable, "no configuration file was specified", false, nil)
+	}
+	config, err := daemonconfig.Load(controller.configPath)
+	if err != nil {
+		return daemonconfig.Snapshot{}, core.WrapError(core.ErrorCodeConfigInvalid, "reload configuration", false, err)
+	}
+	return controller.SetConfig(ctx, config)
+}
+
+func (controller *Controller) ApplyConfig(ctx context.Context, mode daemonconfig.ApplyMode) (daemonconfig.Snapshot, error) {
+	controller.operationMu.Lock()
+	defer controller.operationMu.Unlock()
+	if mode != daemonconfig.ApplyModeRestartSession {
+		return daemonconfig.Snapshot{}, core.WrapError(core.ErrorCodeInvalidRequest, fmt.Sprintf("unsupported config apply mode %q", mode), false, nil)
+	}
 
 	controller.mu.RLock()
-	initialized := controller.initialized
-	daemonConfig := controller.config.Clone()
-	resumeState := cloneResumeState(controller.resumeState)
+	if !controller.initialized {
+		controller.mu.RUnlock()
+		return daemonconfig.Snapshot{}, core.WrapError(core.ErrorCodeConfigUnavailable, "configuration is not initialized", true, nil)
+	}
+	configured := controller.configured.Clone()
+	active := controller.active.Clone()
+	activeSessionID := controller.activeSessionID
 	controller.mu.RUnlock()
 
-	if usesConfiguredSession(config) {
-		if !initialized {
-			return "", core.WrapError(core.ErrorCodeConfigUnavailable, "configuration is not initialized", true, nil)
-		}
-		sessionID := config.SessionID
-		requestedResumeState := config.ResumeState
-		config = daemonConfig.CoreConfig()
-		if sessionID != "" {
-			config.SessionID = sessionID
-		}
-		config.ResumeState = requestedResumeState
-	}
-	if config.ResumeState == nil && resumeStateMatchesConfig(resumeState, config) {
-		config.ResumeState = resumeState
+	candidate := sessionConfigCandidate(active, configured)
+	if activeSessionID == "" {
+		controller.setActiveConfig(candidate, "")
+		return controller.ConfigSnapshot(), nil
 	}
 
-	id, err := controller.Manager.Start(ctx, config)
+	controller.cacheResumeStateLocked(activeSessionID)
+	oldResumeState := controller.resumeStateSnapshot()
+	newCoreConfig := candidate.CoreConfig()
+	if resumeStateMatchesConfig(oldResumeState, newCoreConfig) {
+		newCoreConfig.ResumeState = oldResumeState
+	}
+	newID, err := controller.Manager.Start(ctx, newCoreConfig)
+	if err != nil {
+		rollbackConfig := active.CoreConfig()
+		if resumeStateMatchesConfig(oldResumeState, rollbackConfig) {
+			rollbackConfig.ResumeState = oldResumeState
+		}
+		rollbackID, rollbackErr := controller.Manager.Start(ctx, rollbackConfig)
+		if rollbackErr != nil {
+			controller.setActiveSessionID("")
+			return controller.ConfigSnapshot(), core.WrapError(core.ErrorCodeSessionStartFailed, "apply configuration and restore previous session", true, fmt.Errorf("apply: %w; rollback: %v", err, rollbackErr))
+		}
+		controller.setActiveSessionID(rollbackID)
+		return controller.ConfigSnapshot(), err
+	}
+	controller.setActiveConfig(candidate, newID)
+	return controller.ConfigSnapshot(), nil
+}
+
+func (controller *Controller) StartSession(ctx context.Context, options core.SessionStartOptions) (core.SessionID, error) {
+	controller.operationMu.Lock()
+	defer controller.operationMu.Unlock()
+	controller.mu.RLock()
+	if !controller.initialized {
+		controller.mu.RUnlock()
+		return "", core.WrapError(core.ErrorCodeConfigUnavailable, "configuration is not initialized", true, nil)
+	}
+	if controller.activeSessionID != "" {
+		controller.mu.RUnlock()
+		return "", core.WrapError(core.ErrorCodeSessionAlreadyRunning, "session is already running", false, nil)
+	}
+	candidate := sessionConfigCandidate(controller.active, controller.configured)
+	controller.mu.RUnlock()
+	if options.SessionID != "" {
+		if options.SessionID != core.SessionID(candidate.Session.ID) {
+			return "", core.WrapError(core.ErrorCodeInvalidRequest, "session_id does not match configured session", false, nil)
+		}
+	}
+
+	coreConfig := candidate.CoreConfig()
+	resumeState, err := controller.selectResumeState(options, coreConfig)
+	if err != nil {
+		return "", err
+	}
+	coreConfig.ResumeState = resumeState
+	id, err := controller.Manager.Start(ctx, coreConfig)
 	if err != nil {
 		return id, err
 	}
-	controller.cacheResumeState(id)
+	if options.Resume == core.ResumePolicyProvided {
+		controller.storeResumeState(options.ResumeState)
+	}
+	controller.setActiveConfig(candidate, id)
 	return id, nil
 }
 
 func (controller *Controller) Stop(ctx context.Context, id core.SessionID) error {
 	controller.operationMu.Lock()
 	defer controller.operationMu.Unlock()
-	controller.cacheResumeState(id)
-	return controller.Manager.Stop(ctx, id)
-}
-
-func (controller *Controller) SetConfig(ctx context.Context, config daemonconfig.Config) error {
-	controller.operationMu.Lock()
-	defer controller.operationMu.Unlock()
-	if err := config.Validate(); err != nil {
-		return core.WrapError(core.ErrorCodeConfigInvalid, "validate configuration", false, err)
-	}
-	controller.mu.RLock()
-	initialized := controller.initialized
-	tunConfig := controller.tunConfig
-	controller.mu.RUnlock()
-	if initialized && !reflect.DeepEqual(tunConfig, config.TUNConfig()) {
-		return core.WrapError(core.ErrorCodeRestartRequired, "TUN configuration changes require restarting Core", false, nil)
-	}
-	return controller.apply(ctx, config)
-}
-
-func (controller *Controller) ReloadConfig(ctx context.Context) error {
-	if controller.configPath == "" {
-		return core.WrapError(core.ErrorCodeConfigUnavailable, "no configuration file was specified", false, nil)
-	}
-	config, err := daemonconfig.Load(controller.configPath)
-	if err != nil {
-		return core.WrapError(core.ErrorCodeConfigInvalid, "reload configuration", false, err)
-	}
-	return controller.SetConfig(ctx, config)
-}
-
-func (controller *Controller) apply(ctx context.Context, config daemonconfig.Config) error {
-	controller.mu.RLock()
-	initialized := controller.initialized
-	initialResumeState := controller.resumeState
-	currentConfig := controller.config
-	controller.mu.RUnlock()
-
-	var currentResumeState *core.ResumeState
-	if initialized && currentConfig.Session.AutoStart && currentConfig.Session.ID != "" {
-		if state, err := controller.Manager.ResumeState(core.SessionID(currentConfig.Session.ID)); err == nil {
-			currentResumeState = &state
-		}
-	}
-	if config.Session.AutoStart {
-		coreConfig := config.CoreConfig()
-		if initialized {
-			if resumeStateMatchesConfig(currentResumeState, coreConfig) {
-				coreConfig.ResumeState = currentResumeState
-			}
-		} else if resumeStateMatchesConfig(initialResumeState, coreConfig) {
-			coreConfig.ResumeState = initialResumeState
-		}
-		if _, err := controller.Manager.Start(ctx, coreConfig); err != nil {
-			if initialized && currentConfig.Session.AutoStart {
-				rollbackConfig := currentConfig.CoreConfig()
-				if resumeStateMatchesConfig(currentResumeState, rollbackConfig) {
-					rollbackConfig.ResumeState = currentResumeState
-				}
-				if _, rollbackErr := controller.Manager.Start(context.Background(), rollbackConfig); rollbackErr != nil {
-					return core.WrapError(core.ErrorCodeSessionStartFailed, "apply configuration and restore previous session", false, errors.Join(err, rollbackErr))
-				}
-			}
-			return err
-		}
-	} else {
-		if currentConfig.Session.ID != "" {
-			status := controller.Manager.Status(core.SessionID(currentConfig.Session.ID))
-			if status.ID != "" {
-				if err := controller.Manager.Stop(ctx, status.ID); err != nil {
-					return err
-				}
-			}
-		}
+	controller.cacheResumeStateLocked(id)
+	if err := controller.Manager.Stop(ctx, id); err != nil {
+		return err
 	}
 	controller.mu.Lock()
-	controller.config = config
-	controller.mu.Unlock()
-	for _, warning := range config.SecurityWarnings() {
-		zlog.Printf("Security warning: %s", warning)
+	if controller.activeSessionID == id {
+		controller.activeSessionID = ""
 	}
+	controller.mu.Unlock()
 	return nil
 }
 
-func resumeStateMatchesConfig(state *core.ResumeState, config core.Config) bool {
-	if state == nil {
-		return false
+func (controller *Controller) SetRoutingMode(id core.SessionID, mode core.RoutingMode) error {
+	controller.operationMu.Lock()
+	defer controller.operationMu.Unlock()
+	if !mode.Valid() {
+		return core.WrapError(core.ErrorCodeConfigInvalid, fmt.Sprintf("routing.mode %q is invalid", mode), false, nil)
 	}
-	return state.Scope.ServerAddress == config.ServerAddress &&
-		state.Scope.ServerPort == config.ServerPort &&
-		(state.Scope.Username == "" || config.Username == "" || state.Scope.Username == config.Username)
+	if err := controller.Manager.SetRoutingMode(id, mode); err != nil {
+		return err
+	}
+	controller.mu.Lock()
+	controller.configured.Routing.Mode = mode
+	controller.active.Routing.Mode = mode
+	controller.revision++
+	controller.activeRevision++
+	controller.mu.Unlock()
+	return nil
 }
 
-func usesConfiguredSession(config core.Config) bool {
-	config.SessionID = ""
-	config.ResumeState = nil
-	return reflect.DeepEqual(config, core.Config{})
+func (controller *Controller) setConfigLocked(ctx context.Context, config daemonconfig.Config) (daemonconfig.Snapshot, error) {
+	if err := config.Validate(); err != nil {
+		return daemonconfig.Snapshot{}, core.WrapError(core.ErrorCodeConfigInvalid, "validate configuration", false, err)
+	}
+	controller.mu.RLock()
+	if !controller.initialized {
+		controller.mu.RUnlock()
+		return daemonconfig.Snapshot{}, core.WrapError(core.ErrorCodeConfigUnavailable, "configuration is not initialized", true, nil)
+	}
+	configured := controller.configured.Clone()
+	active := controller.active.Clone()
+	activeSessionID := controller.activeSessionID
+	controller.mu.RUnlock()
+	if reflect.DeepEqual(config, configured) {
+		return controller.ConfigSnapshot(), nil
+	}
+
+	activeChanged := false
+	if config.Routing.Mode != active.Routing.Mode {
+		if activeSessionID != "" {
+			if err := controller.Manager.SetRoutingMode(activeSessionID, config.Routing.Mode); err != nil {
+				return controller.ConfigSnapshot(), err
+			}
+		}
+		active.Routing.Mode = config.Routing.Mode
+		activeChanged = true
+	}
+	if active.Session.AutoStart != config.Session.AutoStart {
+		active.Session.AutoStart = config.Session.AutoStart
+		activeChanged = true
+	}
+	if activeSessionID == "" {
+		candidate := sessionConfigCandidate(active, config)
+		activeChanged = activeChanged || !reflect.DeepEqual(candidate, active)
+		active = candidate
+	}
+
+	controller.mu.Lock()
+	controller.configured = config.Clone()
+	controller.active = active
+	controller.revision++
+	if activeChanged {
+		controller.activeRevision++
+	}
+	controller.mu.Unlock()
+	zlog.Printf("Configuration updated (revision=%d)", controller.ConfigSnapshot().Revision)
+	return controller.ConfigSnapshot(), nil
+}
+
+func (controller *Controller) selectResumeState(options core.SessionStartOptions, config core.Config) (*core.ResumeState, error) {
+	policy := options.Resume
+	if policy == "" {
+		policy = core.ResumePolicyAuto
+	}
+	switch policy {
+	case core.ResumePolicyAuto:
+		state := controller.resumeStateSnapshot()
+		if resumeStateMatchesConfig(state, config) {
+			return state, nil
+		}
+		return nil, nil
+	case core.ResumePolicyNone:
+		return nil, nil
+	case core.ResumePolicyProvided:
+		if options.ResumeState == nil {
+			return nil, core.WrapError(core.ErrorCodeResumeStateInvalid, "resume_state is required when resume is provided", false, nil)
+		}
+		if !resumeStateMatchesConfig(options.ResumeState, config) {
+			return nil, core.WrapError(core.ErrorCodeResumeStateScope, "resume state does not match session configuration", false, nil)
+		}
+		return cloneResumeState(options.ResumeState), nil
+	default:
+		return nil, core.WrapError(core.ErrorCodeInvalidRequest, fmt.Sprintf("unsupported resume policy %q", policy), false, nil)
+	}
+}
+
+func sessionConfigCandidate(active, configured daemonconfig.Config) daemonconfig.Config {
+	candidate := configured.Clone()
+	candidate.Log = active.Log
+	candidate.Control = active.Control
+	candidate.State = active.State
+	candidate.Inbounds.TUN = active.Inbounds.TUN
+	return candidate
+}
+
+func resumeStateMatchesConfig(state *core.ResumeState, config core.Config) bool {
+	return state != nil &&
+		state.Scope.ServerAddress == config.ServerAddress &&
+		state.Scope.ServerPort == config.ServerPort &&
+		(state.Scope.Username == "" || state.Scope.Username == config.Username)
 }
 
 func cloneResumeState(state *core.ResumeState) *core.ResumeState {
@@ -207,20 +339,36 @@ func cloneResumeState(state *core.ResumeState) *core.ResumeState {
 	return &cloned
 }
 
-func (controller *Controller) cacheResumeState(id core.SessionID) {
+func (controller *Controller) cacheResumeStateLocked(id core.SessionID) {
 	state, err := controller.Manager.ResumeState(id)
-	if err != nil {
-		return
+	if err == nil {
+		controller.storeResumeState(&state)
 	}
+}
+
+func (controller *Controller) storeResumeState(state *core.ResumeState) {
 	controller.mu.Lock()
-	controller.resumeState = &state
+	controller.resumeState = cloneResumeState(state)
 	controller.mu.Unlock()
 }
 
-func (controller *Controller) ConfigPath() string { return controller.configPath }
-
-func (controller *Controller) String() string {
+func (controller *Controller) resumeStateSnapshot() *core.ResumeState {
 	controller.mu.RLock()
-	defer controller.mu.RUnlock()
-	return fmt.Sprintf("config(version=%d, session=%s)", controller.config.Version, controller.config.Session.ID)
+	state := cloneResumeState(controller.resumeState)
+	controller.mu.RUnlock()
+	return state
+}
+
+func (controller *Controller) setActiveConfig(config daemonconfig.Config, id core.SessionID) {
+	controller.mu.Lock()
+	controller.active = config.Clone()
+	controller.activeRevision++
+	controller.activeSessionID = id
+	controller.mu.Unlock()
+}
+
+func (controller *Controller) setActiveSessionID(id core.SessionID) {
+	controller.mu.Lock()
+	controller.activeSessionID = id
+	controller.mu.Unlock()
 }

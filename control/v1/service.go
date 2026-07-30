@@ -31,9 +31,15 @@ type Service struct {
 }
 
 type configController interface {
-	Config() daemonconfig.Config
-	SetConfig(context.Context, daemonconfig.Config) error
-	ReloadConfig(context.Context) error
+	ConfigSnapshot() daemonconfig.Snapshot
+	SetConfig(context.Context, daemonconfig.Config) (daemonconfig.Snapshot, error)
+	PatchConfig(context.Context, []byte) (daemonconfig.Snapshot, error)
+	ApplyConfig(context.Context, daemonconfig.ApplyMode) (daemonconfig.Snapshot, error)
+	ReloadConfig(context.Context) (daemonconfig.Snapshot, error)
+}
+
+type sessionController interface {
+	StartSession(context.Context, core.SessionStartOptions) (core.SessionID, error)
 }
 
 func NewService(manager core.Manager, coreVersion string, capabilities []string) *Service {
@@ -73,12 +79,19 @@ func (service *Service) Call(ctx context.Context, method string, params json.Raw
 			Capabilities:    append([]string(nil), service.capabilities...),
 		}, nil
 	case MethodSessionStart:
+		controller, ok := service.manager.(sessionController)
+		if !ok {
+			return nil, core.WrapError(core.ErrorCodeMethodNotFound, "configured session control is unavailable", false, nil)
+		}
 		var startParams SessionStartParams
 		if err := decodeParams(params, &startParams); err != nil {
 			return nil, err
 		}
-		startParams.Config.ResumeState = startParams.ResumeState
-		id, err := service.manager.Start(ctx, startParams.Config)
+		id, err := controller.StartSession(ctx, core.SessionStartOptions{
+			SessionID:   startParams.SessionID,
+			Resume:      startParams.Resume,
+			ResumeState: startParams.ResumeState,
+		})
 		if err != nil {
 			return nil, err
 		}
@@ -191,7 +204,7 @@ func (service *Service) Call(ctx context.Context, method string, params json.Raw
 		if !ok {
 			return nil, core.WrapError(core.ErrorCodeMethodNotFound, "configuration control is unavailable", false, nil)
 		}
-		return ConfigResult{Config: controller.Config()}, nil
+		return controller.ConfigSnapshot(), nil
 	case MethodConfigSet:
 		controller, ok := service.manager.(configController)
 		if !ok {
@@ -201,19 +214,36 @@ func (service *Service) Call(ctx context.Context, method string, params json.Raw
 		if err := decodeParams(params, &configParams); err != nil {
 			return nil, err
 		}
-		if err := controller.SetConfig(ctx, configParams.Config); err != nil {
+		return controller.SetConfig(ctx, configParams.Config)
+	case MethodConfigPatch:
+		controller, ok := service.manager.(configController)
+		if !ok {
+			return nil, core.WrapError(core.ErrorCodeMethodNotFound, "configuration control is unavailable", false, nil)
+		}
+		var patchParams ConfigPatchParams
+		if err := decodeParams(params, &patchParams); err != nil {
 			return nil, err
 		}
-		return ConfigResult{Config: controller.Config()}, nil
+		if len(patchParams.Patch) == 0 {
+			return nil, core.WrapError(core.ErrorCodeInvalidRequest, "config patch is required", false, nil)
+		}
+		return controller.PatchConfig(ctx, patchParams.Patch)
+	case MethodConfigApply:
+		controller, ok := service.manager.(configController)
+		if !ok {
+			return nil, core.WrapError(core.ErrorCodeMethodNotFound, "configuration control is unavailable", false, nil)
+		}
+		var applyParams ConfigApplyParams
+		if err := decodeParams(params, &applyParams); err != nil {
+			return nil, err
+		}
+		return controller.ApplyConfig(ctx, applyParams.Mode)
 	case MethodConfigReload:
 		controller, ok := service.manager.(configController)
 		if !ok {
 			return nil, core.WrapError(core.ErrorCodeMethodNotFound, "configuration control is unavailable", false, nil)
 		}
-		if err := controller.ReloadConfig(ctx); err != nil {
-			return nil, err
-		}
-		return ConfigReloadResult{Reloaded: true}, nil
+		return controller.ReloadConfig(ctx)
 	default:
 		return nil, core.WrapError(core.ErrorCodeMethodNotFound, fmt.Sprintf("method %q is not supported", method), false, nil)
 	}

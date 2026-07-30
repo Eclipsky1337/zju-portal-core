@@ -14,6 +14,7 @@ const (
 	ErrorCodeAuthResponseInvalid    ErrorCode = "AUTH_RESPONSE_INVALID"
 	ErrorCodeAuthHandlerUnavailable ErrorCode = "AUTH_HANDLER_UNAVAILABLE"
 	ErrorCodeSessionStartFailed     ErrorCode = "SESSION_START_FAILED"
+	ErrorCodeSessionAlreadyRunning  ErrorCode = "SESSION_ALREADY_RUNNING"
 	ErrorCodeSessionReconnectFailed ErrorCode = "SESSION_RECONNECT_FAILED"
 	ErrorCodeSessionCloseFailed     ErrorCode = "SESSION_CLOSE_FAILED"
 	ErrorCodeInvalidRequest         ErrorCode = "INVALID_REQUEST"

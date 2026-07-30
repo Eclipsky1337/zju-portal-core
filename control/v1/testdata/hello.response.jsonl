@@ -1,1 +1,1 @@
-{"id":1,"result":{"core_version":"v0.1.0-alpha","protocol_version":1,"capabilities":["atrust","password","sms","cas","oauth2","socks5","http"]}}
+{"id":1,"result":{"core_version":"v0.1.0-alpha","protocol_version":2,"capabilities":["atrust","password","sms","cas","oauth2","socks5","http"]}}

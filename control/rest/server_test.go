@@ -78,18 +78,35 @@ type restConfigManagerStub struct {
 	*managerStub
 	config      daemonconfig.Config
 	setCalls    int
+	patchCalls  int
+	applyCalls  int
 	reloadCalls int
 }
 
-func (manager *restConfigManagerStub) Config() daemonconfig.Config { return manager.config.Clone() }
-func (manager *restConfigManagerStub) SetConfig(_ context.Context, config daemonconfig.Config) error {
+func (manager *restConfigManagerStub) ConfigSnapshot() daemonconfig.Snapshot {
+	return daemonconfig.Snapshot{Revision: 1, Configured: manager.config.Clone(), Active: manager.config.Clone(), ActiveRevision: 1}
+}
+func (manager *restConfigManagerStub) SetConfig(_ context.Context, config daemonconfig.Config) (daemonconfig.Snapshot, error) {
 	manager.config = config
 	manager.setCalls++
-	return nil
+	return manager.ConfigSnapshot(), nil
 }
-func (manager *restConfigManagerStub) ReloadConfig(context.Context) error {
+func (manager *restConfigManagerStub) PatchConfig(_ context.Context, patch []byte) (daemonconfig.Snapshot, error) {
+	config, err := daemonconfig.MergeJSON(manager.config, patch)
+	if err != nil {
+		return daemonconfig.Snapshot{}, err
+	}
+	manager.config = config
+	manager.patchCalls++
+	return manager.ConfigSnapshot(), nil
+}
+func (manager *restConfigManagerStub) ApplyConfig(context.Context, daemonconfig.ApplyMode) (daemonconfig.Snapshot, error) {
+	manager.applyCalls++
+	return manager.ConfigSnapshot(), nil
+}
+func (manager *restConfigManagerStub) ReloadConfig(context.Context) (daemonconfig.Snapshot, error) {
 	manager.reloadCalls++
-	return nil
+	return manager.ConfigSnapshot(), nil
 }
 
 func TestRESTRejectsUnauthorizedAndCrossOriginRequests(t *testing.T) {
@@ -216,7 +233,7 @@ func TestSessionStartUsesServerLifecycleContext(t *testing.T) {
 	server := NewServerContext(lifecycleCtx, service, "secret")
 
 	requestCtx, cancelRequest := context.WithCancel(context.Background())
-	request := httptest.NewRequest(http.MethodPost, APIBasePath+"/sessions", strings.NewReader(`{"config":{"session_id":"default"}}`)).WithContext(requestCtx)
+	request := httptest.NewRequest(http.MethodPost, APIBasePath+"/sessions", strings.NewReader(`{"session_id":"default"}`)).WithContext(requestCtx)
 	request.Header.Set("Authorization", "Bearer secret")
 	recorder := httptest.NewRecorder()
 	server.ServeHTTP(recorder, request)
@@ -357,6 +374,14 @@ func (manager *managerStub) Start(ctx context.Context, config core.Config) (core
 	manager.status[id] = core.SessionStatus{ID: id, State: core.SessionStateReady}
 	manager.mu.Unlock()
 	return id, nil
+}
+
+func (manager *managerStub) StartSession(ctx context.Context, options core.SessionStartOptions) (core.SessionID, error) {
+	id := options.SessionID
+	if id == "" {
+		id = "default"
+	}
+	return manager.Start(ctx, core.Config{SessionID: id, ResumeState: options.ResumeState})
 }
 
 func (*managerStub) RespondAuth(context.Context, core.AuthResponse) error { return nil }

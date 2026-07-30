@@ -31,6 +31,10 @@ type Snapshot struct {
 	Pending        []Change `json:"pending"`
 }
 
+type ApplyMode string
+
+const ApplyModeRestartSession ApplyMode = "restart-session"
+
 func Changes(active, configured Config) []Change {
 	var paths []string
 	collectChanges(reflect.ValueOf(active), reflect.ValueOf(configured), "", &paths)
@@ -78,7 +82,7 @@ func requirementForPath(path string) ApplyRequirement {
 	case path == "routing.mode":
 		return ApplyRequirementLive
 	case strings.HasPrefix(path, "control."),
-		path == "log.output",
+		strings.HasPrefix(path, "log."),
 		strings.HasPrefix(path, "state."),
 		strings.HasPrefix(path, "inbounds.tun."):
 		return ApplyRequirementCoreRestart

@@ -7,7 +7,7 @@ import (
 	"github.com/Eclipsky1337/zju-portal-core/daemonconfig"
 )
 
-const ProtocolVersion = 1
+const ProtocolVersion = 2
 
 const (
 	MethodHello                    = "hello"
@@ -27,6 +27,8 @@ const (
 	MethodResumeStateGet           = "resume_state.get"
 	MethodConfigGet                = "config.get"
 	MethodConfigSet                = "config.set"
+	MethodConfigPatch              = "config.patch"
+	MethodConfigApply              = "config.apply"
 	MethodConfigReload             = "config.reload"
 )
 
@@ -58,7 +60,8 @@ type HelloResult struct {
 }
 
 type SessionStartParams struct {
-	Config      core.Config       `json:"config"`
+	SessionID   core.SessionID    `json:"session_id,omitempty"`
+	Resume      core.ResumePolicy `json:"resume,omitempty"`
 	ResumeState *core.ResumeState `json:"resume_state,omitempty"`
 }
 
@@ -98,10 +101,10 @@ type ConfigSetParams struct {
 	Config daemonconfig.Config `json:"config"`
 }
 
-type ConfigResult struct {
-	Config daemonconfig.Config `json:"config"`
+type ConfigPatchParams struct {
+	Patch json.RawMessage `json:"patch"`
 }
 
-type ConfigReloadResult struct {
-	Reloaded bool `json:"reloaded"`
+type ConfigApplyParams struct {
+	Mode daemonconfig.ApplyMode `json:"mode"`
 }

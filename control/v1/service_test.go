@@ -14,7 +14,7 @@ func TestServiceSharesControlMethodSemantics(t *testing.T) {
 	manager := newManagerStub()
 	service := NewService(manager, "test-core", []string{"atrust"})
 
-	result, err := service.Call(context.Background(), MethodHello, json.RawMessage(`{"protocol_version":1}`))
+	result, err := service.Call(context.Background(), MethodHello, json.RawMessage(`{"protocol_version":2}`))
 	if err != nil {
 		t.Fatalf("Call() error = %v", err)
 	}
@@ -142,15 +142,15 @@ func waitPendingAuthCount(t *testing.T, service *Service, want int) {
 	t.Fatalf("pending authentication challenges = %d, want %d", count, want)
 }
 
-func TestServicePassesResumeStateIntoCoreConfig(t *testing.T) {
+func TestServicePassesProvidedResumeStateToSessionController(t *testing.T) {
 	manager := newManagerStub()
 	service := NewService(manager, "test", nil)
 	defer service.Close(context.Background())
 	manager.responses <- core.AuthResponse{ChallengeID: "sms-1", Value: "123456"}
 
 	result, err := service.Call(context.Background(), MethodSessionStart, json.RawMessage(`{
-		"config":{"session_id":"default","server_address":"vpn.example.edu","server_port":443},
-		"resume_state":{"format":"atrust-client-data","version":1,"revision":4,"scope":{"server_address":"vpn.example.edu","server_port":443},"updated_at":"2026-07-28T00:00:00Z","data":"state","reused":false}
+			"session_id":"default","resume":"provided",
+			"resume_state":{"format":"atrust-client-data","version":1,"revision":4,"scope":{"server_address":"vpn.example.edu","server_port":443},"updated_at":"2026-07-28T00:00:00Z","data":"state","reused":false}
 	}`))
 	if err != nil {
 		t.Fatal(err)
@@ -178,7 +178,7 @@ func TestServiceControlsDaemonConfiguration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := result.(ConfigResult).Config.ATrust.Password; got != "secret" {
+	if got := result.(daemonconfig.Snapshot).Configured.ATrust.Password; got != "secret" {
 		t.Fatalf("password = %q", got)
 	}
 
@@ -186,11 +186,24 @@ func TestServiceControlsDaemonConfiguration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := result.(ConfigResult).Config.ATrust.Port; got != 443 {
+	if got := result.(daemonconfig.Snapshot).Configured.ATrust.Port; got != 443 {
 		t.Fatalf("default port = %d", got)
 	}
 	if manager.setCalls != 1 {
 		t.Fatalf("set calls = %d", manager.setCalls)
+	}
+
+	if _, err := service.Call(context.Background(), MethodConfigPatch, json.RawMessage(`{"patch":{"session":{"auto-reconnect":false}}}`)); err != nil {
+		t.Fatal(err)
+	}
+	if manager.patchCalls != 1 {
+		t.Fatalf("patch calls = %d", manager.patchCalls)
+	}
+	if _, err := service.Call(context.Background(), MethodConfigApply, json.RawMessage(`{"mode":"restart-session"}`)); err != nil {
+		t.Fatal(err)
+	}
+	if manager.applyCalls != 1 {
+		t.Fatalf("apply calls = %d", manager.applyCalls)
 	}
 
 	if _, err := service.Call(context.Background(), MethodConfigReload, nil); err != nil {
@@ -205,16 +218,33 @@ type configManagerStub struct {
 	*managerStub
 	config      daemonconfig.Config
 	setCalls    int
+	patchCalls  int
+	applyCalls  int
 	reloadCalls int
 }
 
-func (manager *configManagerStub) Config() daemonconfig.Config { return manager.config.Clone() }
-func (manager *configManagerStub) SetConfig(_ context.Context, config daemonconfig.Config) error {
+func (manager *configManagerStub) ConfigSnapshot() daemonconfig.Snapshot {
+	return daemonconfig.Snapshot{Revision: 1, Configured: manager.config.Clone(), Active: manager.config.Clone(), ActiveRevision: 1}
+}
+func (manager *configManagerStub) SetConfig(_ context.Context, config daemonconfig.Config) (daemonconfig.Snapshot, error) {
 	manager.config = config
 	manager.setCalls++
-	return nil
+	return manager.ConfigSnapshot(), nil
 }
-func (manager *configManagerStub) ReloadConfig(context.Context) error {
+func (manager *configManagerStub) PatchConfig(_ context.Context, patch []byte) (daemonconfig.Snapshot, error) {
+	config, err := daemonconfig.MergeJSON(manager.config, patch)
+	if err != nil {
+		return daemonconfig.Snapshot{}, err
+	}
+	manager.config = config
+	manager.patchCalls++
+	return manager.ConfigSnapshot(), nil
+}
+func (manager *configManagerStub) ApplyConfig(context.Context, daemonconfig.ApplyMode) (daemonconfig.Snapshot, error) {
+	manager.applyCalls++
+	return manager.ConfigSnapshot(), nil
+}
+func (manager *configManagerStub) ReloadConfig(context.Context) (daemonconfig.Snapshot, error) {
 	manager.reloadCalls++
-	return nil
+	return manager.ConfigSnapshot(), nil
 }

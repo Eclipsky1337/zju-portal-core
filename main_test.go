@@ -23,7 +23,7 @@ import (
 
 func TestDaemonStdioReservesStdoutForJSONL(t *testing.T) {
 	defer zlog.SetOutput(os.Stdout)
-	input := strings.NewReader("{\"id\":1,\"method\":\"hello\",\"params\":{\"protocol_version\":1}}\n")
+	input := strings.NewReader("{\"id\":1,\"method\":\"hello\",\"params\":{\"protocol_version\":2}}\n")
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 	if err := runDaemon(context.Background(), []string{"--stdio"}, input, &stdout, &stderr, func() core.Manager { return coremanager.New() }); err != nil {

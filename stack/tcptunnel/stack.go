@@ -2,6 +2,7 @@ package tcptunnel
 
 import (
 	"context"
+	"errors"
 	"net"
 
 	"github.com/Eclipsky1337/zju-portal-core/client"
@@ -15,7 +16,20 @@ type Stack struct {
 func (s *Stack) Run() {}
 
 func (s *Stack) RunContext(ctx context.Context) error {
-	return ctx.Err()
+	health, ok := s.client.(client.Health)
+	if !ok || health.Done() == nil {
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-health.Done():
+		if err := health.Err(); err != nil {
+			return err
+		}
+		return errors.New("TCP tunnel client stopped")
+	}
 }
 
 func (s *Stack) Close(context.Context) error {

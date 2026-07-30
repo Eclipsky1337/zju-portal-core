@@ -12,7 +12,13 @@ var (
 	ErrNetworkUnreachable = errors.New("network is unreachable")
 	ErrHostUnreachable    = errors.New("host is unreachable")
 	ErrConnectionRefused  = errors.New("connection refused")
+	ErrSessionInvalid     = errors.New("session is invalid")
 )
+
+type Health interface {
+	Done() <-chan struct{}
+	Err() error
+}
 
 type IPResource struct {
 	IPMin       net.IP

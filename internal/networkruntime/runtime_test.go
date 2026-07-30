@@ -50,6 +50,27 @@ func TestGvisorRuntimeReportsTerminalRunError(t *testing.T) {
 	}
 }
 
+func TestTCPTunnelRuntimeReportsClientHealthFailure(t *testing.T) {
+	wantErr := client.ErrSessionInvalid
+	healthDone := make(chan struct{})
+	vpnClient := &clientStub{healthDone: healthDone, healthErr: wantErr}
+	runtime, err := New(context.Background(), vpnClient, Config{TCPTunnelMode: true, DisableRemoteDNS: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runtime.Close(context.Background())
+
+	close(healthDone)
+	select {
+	case <-runtime.Done():
+	case <-time.After(time.Second):
+		t.Fatal("runtime health signal was not closed")
+	}
+	if !errors.Is(runtime.Err(), wantErr) {
+		t.Fatalf("runtime error = %v, want %v", runtime.Err(), wantErr)
+	}
+}
+
 func TestTCPTunnelRuntimeDialsDomainResourceWithoutLocalProxy(t *testing.T) {
 	vpnClient := &clientStub{
 		domainResources: map[string]client.DomainResource{
@@ -556,6 +577,8 @@ type clientStub struct {
 	lastAddress     string
 	l3Err           error
 	l3Conn          io.ReadWriteCloser
+	healthDone      <-chan struct{}
+	healthErr       error
 }
 
 func (*clientStub) IP() (net.IP, error) { return net.ParseIP("10.0.0.2"), nil }
@@ -575,6 +598,10 @@ func (client *clientStub) DNSResource() (map[string]net.IP, error) {
 func (*clientStub) DNSServer() (string, error) { return "", client.ErrResourceNotFound }
 
 func (*clientStub) CanUseTCPTunnel() bool { return true }
+
+func (client *clientStub) Done() <-chan struct{} { return client.healthDone }
+
+func (client *clientStub) Err() error { return client.healthErr }
 
 func (client *clientStub) DialTCP(_ context.Context, address *net.TCPAddr) (net.Conn, error) {
 	client.dialCount.Add(1)

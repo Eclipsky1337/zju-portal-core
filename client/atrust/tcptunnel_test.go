@@ -123,6 +123,40 @@ func TestValidateTCPProtocolResponseRejectsInvalidSID(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "authentication failed: invalid SID") {
 		t.Fatalf("validateTCPProtocolResponse() error = %v", err)
 	}
+	if !errors.Is(err, client.ErrSessionInvalid) {
+		t.Fatalf("validateTCPProtocolResponse() error = %v, want ErrSessionInvalid", err)
+	}
+}
+
+func TestEstablishTCPConnectionReportsInvalidSession(t *testing.T) {
+	clientConn, serverConn := net.Pipe()
+	defer clientConn.Close()
+	defer serverConn.Close()
+
+	request := []byte{0x05, 0x01}
+	go func() {
+		got := make([]byte, len(request))
+		_, _ = io.ReadFull(serverConn, got)
+		response := []byte("invalid SID")
+		frame := []byte{0x53, 0x00, 0x00, byte(len(response))}
+		frame = append(frame, response...)
+		_, _ = serverConn.Write(frame)
+	}()
+
+	atrustClient := NewClient("user", "sid", "device", "sign-key")
+	defer atrustClient.Close()
+	err := atrustClient.establishTCPConnection(context.Background(), clientConn, bufio.NewReader(clientConn), request)
+	if !errors.Is(err, client.ErrSessionInvalid) {
+		t.Fatalf("establishTCPConnection() error = %v, want ErrSessionInvalid", err)
+	}
+	select {
+	case <-atrustClient.Done():
+	default:
+		t.Fatal("client health signal was not closed")
+	}
+	if !errors.Is(atrustClient.Err(), client.ErrSessionInvalid) {
+		t.Fatalf("client health error = %v, want ErrSessionInvalid", atrustClient.Err())
+	}
 }
 
 func TestEstablishTCPConnectionCanSkipWait(t *testing.T) {

@@ -9,6 +9,7 @@ import (
 	"crypto/tls"
 	"encoding/binary"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -21,6 +22,7 @@ import (
 )
 
 type tcpTunnelConn struct {
+	client  *Client
 	tlsConn *tls.Conn
 	reader  *bufio.Reader
 	readBuf []byte
@@ -45,7 +47,7 @@ func validateTCPProtocolResponse(response string) error {
 		return nil
 	}
 	if strings.Contains(response, "invalid SID") {
-		return fmt.Errorf("tcp tunnel authentication failed: invalid SID")
+		return fmt.Errorf("tcp tunnel authentication failed: invalid SID: %w", client.ErrSessionInvalid)
 	}
 	return fmt.Errorf("tcp tunnel setup failed: %s", response)
 }
@@ -172,7 +174,11 @@ func (c *Client) establishTCPConnection(ctx context.Context, conn net.Conn, read
 	if c.skipTCPTunnelWait {
 		return nil
 	}
-	return waitForTCPConnect(reader)
+	err = waitForTCPConnect(reader)
+	if errors.Is(err, client.ErrSessionInvalid) {
+		c.reportHealthError(err)
+	}
+	return err
 }
 
 func (c *tcpTunnelConn) Read(b []byte) (int, error) {
@@ -241,6 +247,9 @@ func (c *tcpTunnelConn) Read(b []byte) (int, error) {
 
 			response := string(data)
 			if err := validateTCPProtocolResponse(response); err != nil {
+				if errors.Is(err, client.ErrSessionInvalid) {
+					c.client.reportHealthError(err)
+				}
 				log.Printf("Failed to connect to the server: %s", response)
 				_ = c.tlsConn.Close()
 				return 0, err
@@ -422,6 +431,7 @@ func (c *Client) DialTCP(ctx context.Context, addr *net.TCPAddr) (net.Conn, erro
 	}
 
 	tunnelConn := &tcpTunnelConn{
+		client:  c,
 		tlsConn: conn,
 		reader:  bufio.NewReader(conn),
 	}

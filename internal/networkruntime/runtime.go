@@ -268,9 +268,7 @@ func newVPNBackend(ctx context.Context, vpnClient client.Client, config Config) 
 		routes:   routes,
 		done:     make(chan struct{}),
 	}
-	if !config.TCPTunnelMode {
-		go backend.runStack(runCtx)
-	}
+	go backend.runStack(runCtx)
 	return backend, nil
 }
 

@@ -50,6 +50,10 @@ type Client struct {
 	lifecycleStop   func() bool
 	closeOnce       sync.Once
 	underlayDialer  *underlay.Dialer
+	healthDone      chan struct{}
+	healthDoneOnce  sync.Once
+	healthMu        sync.RWMutex
+	healthErr       error
 
 	skipTCPTunnelWait bool
 	authHandler       core.AuthHandler
@@ -76,9 +80,32 @@ func NewClientContext(ctx context.Context, username, sid, deviceID, signKey stri
 		SignKey:         signKey,
 		lifecycleCtx:    lifecycleCtx,
 		lifecycleCancel: lifecycleCancel,
+		healthDone:      make(chan struct{}),
 	}
 	client.lifecycleStop = context.AfterFunc(lifecycleCtx, client.Close)
 	return client
+}
+
+func (c *Client) Done() <-chan struct{} {
+	return c.healthDone
+}
+
+func (c *Client) Err() error {
+	c.healthMu.RLock()
+	defer c.healthMu.RUnlock()
+	return c.healthErr
+}
+
+func (c *Client) reportHealthError(err error) {
+	if err == nil {
+		return
+	}
+	c.healthDoneOnce.Do(func() {
+		c.healthMu.Lock()
+		c.healthErr = err
+		c.healthMu.Unlock()
+		close(c.healthDone)
+	})
 }
 
 func (c *Client) Close() {

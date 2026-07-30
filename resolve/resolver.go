@@ -60,13 +60,13 @@ func (r *Resolver) Resolve(ctx context.Context, host string) (resCtx context.Con
 	}
 
 	if cachedIP, found := r.getDNSCache(host); found {
-		log.Printf("%s -> %s", host, cachedIP.String())
+		log.DebugPrintf("%s -> %s", host, cachedIP.String())
 		return ctx, cachedIP, nil
 	}
 
 	if r.dnsResource != nil {
 		if ip, found := r.dnsResource[host]; found {
-			log.Printf("%s -> %s", host, ip.String())
+			log.DebugPrintf("%s -> %s", host, ip.String())
 			return ctx, ip, nil
 		}
 	}
@@ -141,7 +141,7 @@ func (r *Resolver) cacheRemoteResult(host string, addresses []net.IP) (net.IP, e
 	}
 	address := addresses[0]
 	r.setDNSCache(host, address)
-	log.Printf("%s -> %s", host, address.String())
+	log.DebugPrintf("%s -> %s", host, address.String())
 	return address, nil
 }
 
@@ -195,12 +195,12 @@ func (r *Resolver) ResolveWithSecondaryDNS(ctx context.Context, host string) (co
 			return ctx, nil, err
 		} else {
 			r.setDNSCache(host, targets[0])
-			log.Printf("%s -> %s", host, targets[0].String())
+			log.DebugPrintf("%s -> %s", host, targets[0].String())
 			return ctx, targets[0], nil
 		}
 	} else {
 		r.setDNSCache(host, targets[0])
-		log.Printf("%s -> %s", host, targets[0].String())
+		log.DebugPrintf("%s -> %s", host, targets[0].String())
 		return ctx, targets[0], nil
 	}
 }

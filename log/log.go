@@ -6,11 +6,12 @@ import (
 	"log"
 	"os"
 	"sync"
+	"sync/atomic"
 )
 
 var (
 	mu     sync.RWMutex
-	debug  bool
+	debug  atomic.Bool
 	output io.Writer = os.Stdout
 )
 
@@ -31,16 +32,14 @@ func SetOutput(writer io.Writer) {
 }
 
 func EnableDebug() {
-	mu.Lock()
-	debug = true
-	mu.Unlock()
+	debug.Store(true)
 }
 
 func DisableDebug() {
-	mu.Lock()
-	debug = false
-	mu.Unlock()
+	debug.Store(false)
 }
+
+func DebugEnabled() bool { return debug.Load() }
 
 func Print(v ...any) {
 	log.Print(v...)
@@ -97,9 +96,7 @@ func NewLogger(prefix string) *log.Logger {
 }
 
 func debugEnabled() bool {
-	mu.RLock()
-	defer mu.RUnlock()
-	return debug
+	return debug.Load()
 }
 
 func dumpHex(buf []byte) {

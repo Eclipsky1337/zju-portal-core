@@ -405,7 +405,9 @@ func (c *l3TunnelConn) WritePacket(meta packetMeta, appID, nodeGroupID string, p
 		return fmt.Errorf("l3-tunnel connect token too long: %d", len(token))
 	}
 	payload := buildDataPayload(token, [][]byte{pkt})
-	log.DebugPrintf("l3-tunnel send data meta=%s appID=%s group=%s authID=%d tokenLen=%d pktLen=%d payloadLen=%d", formatMeta(meta), appID, nodeGroupID, ct.authID, len(token), len(pkt), len(payload))
+	if log.DebugEnabled() {
+		log.DebugPrintf("l3-tunnel send data meta=%s appID=%s group=%s authID=%d tokenLen=%d pktLen=%d payloadLen=%d", formatMeta(meta), appID, nodeGroupID, ct.authID, len(token), len(pkt), len(payload))
+	}
 	return c.writeFrame(payload)
 }
 
@@ -696,6 +698,9 @@ func formatMeta(meta packetMeta) string {
 }
 
 func logFrame(prefix string, data []byte) {
+	if !log.DebugEnabled() {
+		return
+	}
 	if len(data) >= 2 {
 		log.DebugPrintf("l3-tunnel %s frame cmd=0x%02x len=%d", prefix, data[1], len(data))
 	} else {

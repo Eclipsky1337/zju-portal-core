@@ -92,7 +92,7 @@ func waitForTCPConnect(reader *bufio.Reader) error {
 		if _, err := io.ReadFull(reader, header); err != nil {
 			return fmt.Errorf("failed to read tcp tunnel response: %w", err)
 		}
-		log.DebugPrint("Received header: ", fmt.Sprintf("%02X %02X", header[0], header[1]))
+		log.DebugPrintf("Received header: %02X %02X", header[0], header[1])
 		if header[0] == 0x05 && header[1] == 0x81 {
 			continue
 		}
@@ -104,8 +104,10 @@ func waitForTCPConnect(reader *bufio.Reader) error {
 		if err != nil {
 			return fmt.Errorf("failed to read tcp tunnel protocol response: %w", err)
 		}
-		log.DebugPrint("Received protocol response:")
-		log.DebugDumpHex([]byte(response))
+		if log.DebugEnabled() {
+			log.DebugPrint("Received protocol response:")
+			log.DebugDumpHex([]byte(response))
+		}
 		if err := validateTCPProtocolResponse(response); err != nil {
 			return err
 		}
@@ -116,7 +118,7 @@ func waitForTCPConnect(reader *bufio.Reader) error {
 	if err != nil {
 		return fmt.Errorf("failed to read tcp tunnel connect status: %w", err)
 	}
-	log.DebugPrint("Received TCP connect status: ", fmt.Sprintf("05 %02X", status))
+	log.DebugPrintf("Received TCP connect status: 05 %02X", status)
 
 	switch status {
 	case 0x00:
@@ -186,7 +188,7 @@ func (c *tcpTunnelConn) Read(b []byte) (int, error) {
 		if err != nil {
 			return 0, err
 		}
-		log.DebugPrint("Received header: ", fmt.Sprintf("%02X %02X", header[0], header[1]))
+		log.DebugPrintf("Received header: %02X %02X", header[0], header[1])
 		if header[0] == 0x01 && header[1] == 0x00 {
 			lengthBytes := make([]byte, 2)
 			_, err = io.ReadFull(c.reader, lengthBytes)

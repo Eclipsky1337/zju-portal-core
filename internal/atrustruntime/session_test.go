@@ -559,6 +559,12 @@ func TestMonitorRuntimeContinuesAfterVPNReplacement(t *testing.T) {
 	if event == nil || event.Error == nil || event.Error.Code != core.ErrorCodeSessionReconnectFailed {
 		t.Fatalf("session error event = %#v", event)
 	}
+	if !outbound.isClosed() {
+		t.Fatal("failed network runtime was not closed")
+	}
+	if status := session.Status(); status.State != core.SessionStateFailed {
+		t.Fatalf("session status = %#v, want failed", status)
+	}
 }
 
 func TestMonitorRuntimeFailsWhenGvisorClientSessionIsInvalid(t *testing.T) {

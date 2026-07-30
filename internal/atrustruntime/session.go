@@ -197,6 +197,12 @@ func (s *Session) monitorRuntime(ctx context.Context, runtime *Runtime) {
 			return
 		}
 		if s.config.DisableAutoReconnect {
+			s.mu.RLock()
+			network := s.network
+			s.mu.RUnlock()
+			if network != nil {
+				_ = network.Close(context.Background())
+			}
 			_ = runtime.CloseContext(context.Background())
 			s.failWith(core.ErrorCodeSessionReconnectFailed, "VPN network runtime stopped", runtimeErr)
 			return

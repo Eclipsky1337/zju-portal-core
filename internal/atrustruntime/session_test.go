@@ -567,6 +567,31 @@ func TestMonitorRuntimeContinuesAfterVPNReplacement(t *testing.T) {
 	}
 }
 
+func TestMonitorRuntimeContinuesWhenBackendChangesDuringErrorRead(t *testing.T) {
+	outbound := newHealthOutboundStub()
+	runtime := &Runtime{outbound: wrapNetwork(outbound)}
+	session := newSession("session-monitor-health-read-race", Config{DisableAutoReconnect: true}, defaultDependencies())
+	session.state = core.SessionStateReady
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go session.monitorRuntime(ctx, runtime)
+
+	replaced := outbound.failAndReplaceOnErr(errors.New("old backend stopped"))
+	select {
+	case <-replaced:
+	case <-time.After(time.Second):
+		t.Fatal("backend was not replaced during error read")
+	}
+
+	wantErr := errors.New("replacement backend stopped")
+	outbound.fail(wantErr)
+	events := collectEventsUntil(t, session.Events(), core.EventTypeSessionError)
+	event := findEvent(events, core.EventTypeSessionError)
+	if event == nil || event.Error == nil || event.Error.Detail != wantErr.Error() {
+		t.Fatalf("session error event = %#v", event)
+	}
+}
+
 func TestMonitorRuntimeFailsWhenGvisorClientSessionIsInvalid(t *testing.T) {
 	healthDone := make(chan struct{})
 	localConn, remoteConn := net.Pipe()
@@ -1060,6 +1085,8 @@ type healthOutboundStub struct {
 	serviceEvents        chan core.ServiceStatus
 	replaceErr           error
 	replaceCalls         atomic.Int32
+	replaceOnErr         bool
+	replaced             chan struct{}
 }
 
 type healthResourceClientStub struct {
@@ -1118,9 +1145,30 @@ func (outbound *healthOutboundStub) Done() <-chan struct{} {
 }
 
 func (outbound *healthOutboundStub) Err() error {
-	outbound.mu.RLock()
-	defer outbound.mu.RUnlock()
+	outbound.mu.Lock()
+	defer outbound.mu.Unlock()
+	if outbound.replaceOnErr {
+		outbound.replaceOnErr = false
+		outbound.done = make(chan struct{})
+		outbound.err = nil
+		outbound.closed = false
+		close(outbound.replaced)
+	}
 	return outbound.err
+}
+
+func (outbound *healthOutboundStub) failAndReplaceOnErr(err error) <-chan struct{} {
+	outbound.mu.Lock()
+	outbound.err = err
+	outbound.replaceOnErr = true
+	outbound.replaced = make(chan struct{})
+	if !outbound.closed {
+		close(outbound.done)
+		outbound.closed = true
+	}
+	replaced := outbound.replaced
+	outbound.mu.Unlock()
+	return replaced
 }
 
 func (outbound *healthOutboundStub) fail(err error) {

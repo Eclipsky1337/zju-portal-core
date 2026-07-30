@@ -183,6 +183,9 @@ func (s *Session) monitorRuntime(ctx context.Context, runtime *Runtime) {
 		}
 		runtimeErr := runtime.Err()
 		if runtimeErr == nil {
+			if current := runtime.Done(); current != nil && current != done {
+				continue
+			}
 			return
 		}
 		if core.ErrorCodeOf(runtimeErr) == core.ErrorCodeTUNUnavailable {

@@ -29,7 +29,7 @@ import (
 
 var CommitID string
 
-const coreV2Version = "2.0.0-alpha.1"
+const coreVersionNumber = "v0.1.0-alpha"
 const daemonShutdownTimeout = 5 * time.Second
 
 var controlCapabilities = []string{
@@ -347,7 +347,7 @@ func persistResumeStateEvents(ctx context.Context, events <-chan core.Event, pro
 
 func coreVersion() string {
 	if CommitID == "" {
-		return coreV2Version
+		return coreVersionNumber
 	}
-	return coreV2Version + "-" + CommitID
+	return coreVersionNumber + "-" + CommitID
 }

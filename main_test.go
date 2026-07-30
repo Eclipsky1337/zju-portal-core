@@ -39,7 +39,7 @@ func TestDaemonStdioReservesStdoutForJSONL(t *testing.T) {
 	if err := decoder.Decode(&response); err != nil {
 		t.Fatalf("decode stdout: %v: %q", err, stdout.String())
 	}
-	if response.ID != 1 || response.Result.CoreVersion != coreV2Version {
+	if response.ID != 1 || response.Result.CoreVersion != coreVersionNumber {
 		t.Fatalf("response = %#v", response)
 	}
 	var extra any

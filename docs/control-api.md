@@ -1,6 +1,6 @@
 # Control API 指引
 
-本文介绍 ZJU Portal Core v2 的控制接口，适用于桌面客户端、调试面板、守护进程管理器和
+本文介绍 ZJU Portal Core 的控制接口，适用于桌面客户端、调试面板、守护进程管理器和
 自动化脚本。当前控制协议版本为 `1`，提供以下两种传输：
 
 - REST：HTTP JSON 接口，并通过 SSE 推送事件；
@@ -80,7 +80,7 @@ api "$API/hello" | jq .
 ```json
 {
   "result": {
-    "core_version": "2.0.0-alpha.1",
+    "core_version": "v0.1.0-alpha",
     "protocol_version": 1,
     "capabilities": [
       "atrust",
@@ -790,7 +790,7 @@ zju-portal-core --stdio
 响应：
 
 ```json
-{"id":1,"result":{"core_version":"2.0.0-alpha.1","protocol_version":1,"capabilities":[]}}
+{"id":1,"result":{"core_version":"v0.1.0-alpha","protocol_version":1,"capabilities":[]}}
 ```
 
 错误响应：

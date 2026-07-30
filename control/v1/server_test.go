@@ -25,7 +25,7 @@ func TestHelloFixture(t *testing.T) {
 		t.Fatal(err)
 	}
 	manager := newManagerStub()
-	server := NewServer(manager, "2.0.0-alpha.1", []string{"atrust", "password", "sms", "cas", "oauth2", "socks5", "http"})
+	server := NewServer(manager, "v0.1.0-alpha", []string{"atrust", "password", "sms", "cas", "oauth2", "socks5", "http"})
 	var output bytes.Buffer
 	if err := server.Serve(context.Background(), bytes.NewReader(request), &output); err != nil {
 		t.Fatalf("Serve() error = %v", err)
@@ -305,7 +305,7 @@ func TestServerFullControlFlow(t *testing.T) {
 	manager.services["session-1"] = []core.ServiceStatus{
 		{Type: core.ServiceTypeSOCKS5, Address: "127.0.0.1:1080", Running: true},
 	}
-	server := NewServer(manager, "2.0.0-alpha.1", []string{"atrust", "socks5"})
+	server := NewServer(manager, "v0.1.0-alpha", []string{"atrust", "socks5"})
 	reader, writer := io.Pipe()
 	var output bytes.Buffer
 	serveDone := make(chan error, 1)

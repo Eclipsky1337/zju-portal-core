@@ -80,7 +80,7 @@ api "$API/hello" | jq .
 {
   "result": {
     "core_version": "v0.1.0-alpha",
-    "protocol_version": 1,
+    "protocol_version": 2,
     "capabilities": [
       "atrust",
       "socks5",
@@ -164,10 +164,12 @@ api "$API/hello" | jq .
 | 方法 | 路径 | 功能 |
 | --- | --- | --- |
 | `GET` | `/hello` | 查询协议版本和能力 |
-| `GET` | `/config` | 读取当前守护进程配置 |
-| `PUT` | `/config` | 应用完整守护进程配置 |
-| `POST` | `/config/reload` | 从启动时指定的配置文件重新加载 |
-| `POST` | `/sessions` | 启动或替换当前 Session |
+| `GET` | `/config` | 读取 configured/active 配置和待应用变更 |
+| `PUT` | `/config` | 替换完整 configured 配置 |
+| `PATCH` | `/config` | 部分修改 configured 配置 |
+| `POST` | `/config/apply` | 显式应用需要重启 Session 的配置 |
+| `POST` | `/config/reload` | 从启动时指定的配置文件更新 configured 配置 |
+| `POST` | `/sessions` | 使用当前配置启动 Session |
 | `GET` | `/sessions/{id}` | 查询 Session 状态 |
 | `DELETE` | `/sessions/{id}` | 停止 Session |
 | `POST` | `/auth/responses` | 回应认证 challenge |
@@ -192,7 +194,7 @@ GET /api/v1/config
 ```
 
 ```bash
-api "$API/config" | jq .result.config
+api "$API/config" | jq .result
 ```
 
 响应结构：
@@ -200,7 +202,8 @@ api "$API/config" | jq .result.config
 ```json
 {
   "result": {
-    "config": {
+    "revision": 12,
+    "configured": {
       "version": 1,
       "log": {},
       "control": {},
@@ -211,15 +214,31 @@ api "$API/config" | jq .result.config
       "routing": {},
       "dns": {},
       "inbounds": {}
-    }
+    },
+    "active": {
+      "version": 1
+    },
+    "active_revision": 10,
+    "pending": [
+      {
+        "path": "dns.remote.server",
+        "requires": "session_restart"
+      }
+    ]
   }
 }
 ```
 
+- `configured`：通过配置文件或配置 API 设置的目标配置；
+- `active`：当前 Core 服务和 Session 实际使用的配置快照；
+- `revision`、`active_revision`：两个快照各自的单调递增版本；
+- `pending`：尚未应用的字段及其所需操作，可能为 `session_restart` 或
+  `core_restart`。`routing.mode` 可以实时应用，因此正常情况下不会留在 `pending` 中。
+
 当前实现返回完整配置，其中可能包含 aTrust 密码、REST Secret、SOCKS5 密码和上游代理
 密码。调用方必须把该接口和 REST Token 视为高敏感权限，不得直接写入普通日志。
 
-### 4.2 应用完整配置
+### 4.2 替换完整配置
 
 ```http
 PUT /api/v1/config
@@ -236,39 +255,56 @@ api -X PUT -H 'Content-Type: application/json' \
   "$API/config"
 ```
 
-该接口执行完整配置替换，而不是字段级 PATCH。省略的字段会使用配置默认值。配置校验失败
-时返回 `CONFIG_INVALID`。
+该接口执行完整 configured 配置替换。省略字段使用默认值，配置校验失败时返回
+`CONFIG_INVALID`。它不会根据 `session.auto-start` 隐式启动或停止 Session，也不会静默重启
+当前 Session。
 
-运行期间修改 TUN 配置会返回：
+`routing.mode` 会立即同步到活动 Session；其他差异保留在 `pending` 中。`session.auto-start`
+只决定 Core 进程启动时是否自动建立 Session，运行期间修改该字段不会改变当前 Session。
 
-```json
+### 4.3 部分修改配置
+
+```http
+PATCH /api/v1/config
+Content-Type: application/json
+
 {
-  "error": {
-    "code": "RESTART_REQUIRED",
-    "message": "TUN configuration changes require restarting Core",
-    "retryable": false
+  "session": {
+    "auto-reconnect": false
   }
 }
 ```
 
-非 TUN 配置会尝试启动替代 Session；若应用失败，Core 会尝试恢复之前的配置和 Resume
-State。
+PATCH 使用与配置文件相同的嵌套字段结构。未出现的字段保持不变，布尔值 `false` 和空字符串
+会被视为明确修改。未知字段或合并后的无效配置会返回 `CONFIG_INVALID`。
 
-### 4.3 从文件重新加载
+### 4.4 显式应用 Session 配置
+
+```http
+POST /api/v1/config/apply
+Content-Type: application/json
+
+{
+  "mode": "restart-session"
+}
+```
+
+当 Session 正在运行时，Core 使用 configured 中可由 Session 重启生效的字段建立替代
+Session；失败时尝试恢复之前的 active 配置和 Resume State。当 Session 未运行时，只更新
+active Session 配置，之后的 `POST /sessions` 会使用它。
+
+`control.*`、`log.*`、`state.resume-file` 和 `inbounds.tun.*` 当前仍需要重启 Core，调用本接口
+后会继续显示在 `pending` 中。
+
+### 4.5 从文件重新加载
 
 ```http
 POST /api/v1/config/reload
 ```
 
-```json
-{
-  "result": {
-    "reloaded": true
-  }
-}
-```
-
 只有通过 `--config` 或 `-f` 指定配置文件时可用，否则返回 `CONFIG_UNAVAILABLE`。
+它只更新 configured 配置并应用 live 字段，返回值与 `GET /config` 相同，不会根据
+`auto-start` 隐式启停 Session。
 
 ## 5. Session 管理
 
@@ -279,26 +315,10 @@ POST /api/v1/sessions
 Content-Type: application/json
 ```
 
-请求体使用低层 `core.Config`，字段为下划线风格。它与 `/config` 使用的嵌套守护进程配置
-不是同一种结构。
-
-最小密码认证示例：
+Session 始终使用 `/config` 中的统一配置，不再接受低层 `core.Config`。默认请求可以为空：
 
 ```json
-{
-  "config": {
-    "protocol": "atrust",
-    "session_id": "default",
-    "server_address": "vpn.zju.edu.cn",
-    "server_port": 443,
-    "username": "user",
-    "password": "password",
-    "auth_type": "auth/psw",
-    "login_domain": "Radius",
-    "auto_detect_interface": false,
-    "routing_mode": "rule"
-  }
-}
+{}
 ```
 
 ```bash
@@ -319,39 +339,30 @@ api -X POST -H 'Content-Type: application/json' \
 }
 ```
 
-当前进程只维护一个活动 Session。启动新 Session 前会先关闭已有 Session，因此该接口具有
-替换语义，不是创建多个并行 VPN。
+当前进程只维护一个活动 Session。已有 Session 尚未停止时再次启动会返回
+`SESSION_ALREADY_RUNNING`，不会隐式替换。需要应用新配置时使用 `/config/apply`；需要手动
+重新启动时先停止当前 Session。
 
-Core 由守护进程配置文件启动时，可以省略低层 `config`，直接使用当前已加载配置：
-
-```json
-{}
-```
-
-也可以只覆盖 Session ID，其余字段继续使用当前配置：
+可以显式提供 configured 中的 Session ID，但不能临时覆盖为其他 ID：
 
 ```json
 {
-  "config": {
-    "session_id": "default"
-  }
+  "session_id": "default"
 }
 ```
 
-当请求没有显式提供 `resume_state` 时，Core 会自动复用启动时加载或上次停止 Session 前
-缓存的匹配 Resume State。Resume State 的 server、port 和 username 不匹配时不会注入。
+`resume` 支持三种策略：
 
-可选的 `resume_state` 与 `config` 同级：
+- `auto`：默认值，复用启动时加载或上次停止前缓存的匹配 Resume State；
+- `none`：忽略缓存，强制走正常认证流程；
+- `provided`：使用请求中显式提供的 `resume_state`。
+
+显式提供 Resume State：
 
 ```json
 {
-  "config": {
-    "protocol": "atrust",
-    "session_id": "default",
-    "server_address": "vpn.zju.edu.cn",
-    "server_port": 443,
-    "username": "user"
-  },
+  "session_id": "default",
+  "resume": "provided",
   "resume_state": {
     "format": "atrust-client-data",
     "version": 1,
@@ -702,7 +713,8 @@ Content-Type: application/json
 | `global` | 所有可处理流量优先走 aTrust |
 | `direct` | 流量走直接出口，不使用 aTrust 资源路由 |
 
-成功修改会产生 `routing.mode_changed` 事件。该接口只切换运行时路由模式，不修改磁盘配置。
+成功修改会产生 `routing.mode_changed` 事件，并同步更新内存中的 configured/active 配置及其
+revision。它不会写回启动时读取的 YAML 文件。
 
 ## 10. Resume State
 
@@ -802,13 +814,13 @@ zju-portal-core --stdio
 请求：
 
 ```json
-{"id":1,"method":"hello","params":{"protocol_version":1}}
+{"id":1,"method":"hello","params":{"protocol_version":2}}
 ```
 
 响应：
 
 ```json
-{"id":1,"result":{"core_version":"v0.1.0-alpha","protocol_version":1,"capabilities":[]}}
+{"id":1,"result":{"core_version":"v0.1.0-alpha","protocol_version":2,"capabilities":[]}}
 ```
 
 错误响应：
@@ -849,6 +861,8 @@ JSONL 事件没有请求 ID：
 | `resume_state.get` | `GET /sessions/{id}/resume-state` |
 | `config.get` | `GET /config` |
 | `config.set` | `PUT /config` |
+| `config.patch` | `PATCH /config` |
+| `config.apply` | `POST /config/apply` |
 | `config.reload` | `POST /config/reload` |
 
 JSONL 的 `params` 使用 `control/v1` 参数对象。例如查询状态：
@@ -865,6 +879,13 @@ JSONL 的 `params` 使用 `control/v1` 参数对象。例如查询状态：
 
 REST `PUT /config` 则直接接收配置对象，这是两种传输之间需要特别处理的差异。
 
+JSONL 部分更新和显式应用示例：
+
+```json
+{"id":5,"method":"config.patch","params":{"patch":{"session":{"auto-reconnect":false}}}}
+{"id":6,"method":"config.apply","params":{"mode":"restart-session"}}
+```
+
 ## 13. 错误码
 
 当前公开错误码：
@@ -879,6 +900,7 @@ AUTH_CHALLENGE_INVALID
 AUTH_RESPONSE_INVALID
 AUTH_HANDLER_UNAVAILABLE
 SESSION_START_FAILED
+SESSION_ALREADY_RUNNING
 SESSION_RECONNECT_FAILED
 SESSION_CLOSE_FAILED
 INVALID_REQUEST

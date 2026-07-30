@@ -7,6 +7,8 @@ import (
 	"net"
 	"testing"
 	"time"
+
+	"github.com/Eclipsky1337/zju-portal-core/client"
 )
 
 func TestL3TunnelHeartbeatExpiration(t *testing.T) {
@@ -60,6 +62,43 @@ func TestL3TunnelFailureReachesPacketReader(t *testing.T) {
 	}
 	if err := connection.Close(); err != nil {
 		t.Fatalf("second Close() error = %v", err)
+	}
+}
+
+func TestL3TunnelAuthInvalidSIDReportsClientHealth(t *testing.T) {
+	reported := make(chan error, 1)
+	connection := &l3TunnelConn{
+		closeCh:       make(chan struct{}),
+		incoming:      make(chan []byte),
+		conntrackMgr:  newConntrackMgr(),
+		onHealthError: func(err error) { reported <- err },
+	}
+	connection.handleAuthResp(1, []byte(`{"message":"invalid SID","data":{"conntrackHash":1}}`))
+
+	select {
+	case err := <-reported:
+		if !errors.Is(err, client.ErrSessionInvalid) {
+			t.Fatalf("reported error = %v, want ErrSessionInvalid", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("invalid SID did not report client health failure")
+	}
+}
+
+func TestL3TunnelAuthOrdinaryFailureDoesNotReportClientHealth(t *testing.T) {
+	reported := make(chan error, 1)
+	connection := &l3TunnelConn{
+		closeCh:       make(chan struct{}),
+		incoming:      make(chan []byte),
+		conntrackMgr:  newConntrackMgr(),
+		onHealthError: func(err error) { reported <- err },
+	}
+	connection.handleAuthResp(1, []byte(`{"message":"destination denied","data":{"conntrackHash":1}}`))
+
+	select {
+	case err := <-reported:
+		t.Fatalf("ordinary auth failure reported client health error: %v", err)
+	default:
 	}
 }
 

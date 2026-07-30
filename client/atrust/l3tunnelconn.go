@@ -19,6 +19,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/Eclipsky1337/zju-portal-core/client"
 	"github.com/Eclipsky1337/zju-portal-core/log"
 )
 
@@ -62,6 +63,7 @@ type l3TunnelConn struct {
 	signKey       []byte
 	info          clientInfo
 	onVIP         func([]net.IP)
+	onHealthError func(error)
 }
 
 type authIP struct {
@@ -151,7 +153,7 @@ type frame struct {
 	dataMode string
 }
 
-func newL3TunnelConn(ctx context.Context, dialTLS func(context.Context, string, string, *tls.Config) (*tls.Conn, error), addr string, info clientInfo, signKeyHex string, onVIP func([]net.IP)) (*l3TunnelConn, error) {
+func newL3TunnelConn(ctx context.Context, dialTLS func(context.Context, string, string, *tls.Config) (*tls.Conn, error), addr string, info clientInfo, signKeyHex string, onVIP func([]net.IP), onHealthError func(error)) (*l3TunnelConn, error) {
 	tlsConn, err := dialTLS(ctx, "tcp", addr, &tls.Config{InsecureSkipVerify: true})
 	if err != nil {
 		return nil, err
@@ -164,14 +166,15 @@ func newL3TunnelConn(ctx context.Context, dialTLS func(context.Context, string, 
 	}
 
 	c := &l3TunnelConn{
-		tlsConn:      tlsConn,
-		reader:       bufio.NewReader(tlsConn),
-		incoming:     make(chan []byte, 128),
-		closeCh:      make(chan struct{}),
-		conntrackMgr: newConntrackMgr(),
-		signKey:      signKey,
-		info:         info,
-		onVIP:        onVIP,
+		tlsConn:       tlsConn,
+		reader:        bufio.NewReader(tlsConn),
+		incoming:      make(chan []byte, 128),
+		closeCh:       make(chan struct{}),
+		conntrackMgr:  newConntrackMgr(),
+		signKey:       signKey,
+		info:          info,
+		onVIP:         onVIP,
+		onHealthError: onHealthError,
 	}
 	c.lastHeartbeat.Store(time.Now().UnixNano())
 
@@ -466,7 +469,7 @@ func (c *l3TunnelConn) handleAuthResp(status byte, payload []byte) {
 
 	var err error
 	if resp.Code != 0 {
-		err = fmt.Errorf("auth failed: %d %s", resp.Code, resp.Message)
+		err = classifyL3SessionError(fmt.Errorf("auth failed: %d %s", resp.Code, resp.Message), resp.Message)
 	}
 	token := strings.TrimSpace(resp.Data.ConnectToken)
 	if token == "" {
@@ -477,7 +480,7 @@ func (c *l3TunnelConn) handleAuthResp(status byte, payload []byte) {
 	}
 	log.DebugPrintf("l3-tunnel auth resp code=%d conntrack=%d tokenLen=%d", resp.Code, resp.Data.ConntrackHash, len(token))
 	c.conntrackMgr.markAuth(resp.Data.ConntrackHash, token, err)
-
+	c.reportHealthError(err)
 }
 
 func (c *l3TunnelConn) handleSecondVipResp(status byte, payload []byte) {
@@ -496,8 +499,25 @@ func (c *l3TunnelConn) handleSecondVipResp(status byte, payload []byte) {
 
 func (c *l3TunnelConn) markAuthErrorFromPayload(payload []byte, err error) {
 	var resp authResponseIP
-	if json.Unmarshal(payload, &resp) == nil && resp.Data.ConntrackHash != 0 {
-		c.conntrackMgr.markAuth(resp.Data.ConntrackHash, "", err)
+	if json.Unmarshal(payload, &resp) == nil {
+		err = classifyL3SessionError(err, resp.Message)
+		if resp.Data.ConntrackHash != 0 {
+			c.conntrackMgr.markAuth(resp.Data.ConntrackHash, "", err)
+		}
+	}
+	c.reportHealthError(err)
+}
+
+func classifyL3SessionError(err error, message string) error {
+	if err != nil && strings.Contains(strings.ToLower(message), "invalid sid") {
+		return fmt.Errorf("%v: %w", err, client.ErrSessionInvalid)
+	}
+	return err
+}
+
+func (c *l3TunnelConn) reportHealthError(err error) {
+	if errors.Is(err, client.ErrSessionInvalid) && c.onHealthError != nil {
+		c.onHealthError(err)
 	}
 }
 
@@ -749,16 +769,22 @@ func (c *l3TunnelConn) authTunnel() error {
 	}
 	log.DebugPrintf("l3-tunnel recv tunnel auth payload len=%d status=%d", len(payload), status)
 	log.DebugDumpHex(payload)
-	if status != 0 {
-		return fmt.Errorf("l3-tunnel tunnel auth status %d", status)
-	}
+	var resp authResponseSID
 	if len(payload) > 0 {
-		var resp authResponseSID
 		if err := json.Unmarshal(payload, &resp); err != nil {
 			return err
 		}
+	}
+	if status != 0 {
+		err := classifyL3SessionError(fmt.Errorf("l3-tunnel tunnel auth status %d", status), resp.Message)
+		c.reportHealthError(err)
+		return err
+	}
+	if len(payload) > 0 {
 		if resp.Code != 0 {
-			return fmt.Errorf("l3-tunnel tunnel auth failed: %d %s", resp.Code, resp.Message)
+			err := classifyL3SessionError(fmt.Errorf("l3-tunnel tunnel auth failed: %d %s", resp.Code, resp.Message), resp.Message)
+			c.reportHealthError(err)
+			return err
 		}
 	}
 

@@ -119,7 +119,7 @@ func (t *L3Tunnel) getConn(nodeGroupID string) (*l3TunnelConn, error) {
 	}
 	ctx, cancel := context.WithTimeout(t.ctx, 10*time.Second)
 	defer cancel()
-	conn, err := newL3TunnelConn(ctx, t.client.underlayDialer.DialTLSContext, addr, info, t.client.SignKey, t.updateVIP)
+	conn, err := newL3TunnelConn(ctx, t.client.underlayDialer.DialTLSContext, addr, info, t.client.SignKey, t.updateVIP, t.client.reportHealthError)
 	if err != nil {
 		return nil, err
 	}

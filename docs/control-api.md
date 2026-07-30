@@ -295,7 +295,7 @@ Content-Type: application/json
     "password": "password",
     "auth_type": "auth/psw",
     "login_domain": "Radius",
-    "auto_detect_interface": true,
+    "auto_detect_interface": false,
     "routing_mode": "rule"
   }
 }

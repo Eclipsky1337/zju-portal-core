@@ -87,7 +87,7 @@ func TestConfigJSONUsesDefaultsAndRejectsUnknownFields(t *testing.T) {
 	if err := json.Unmarshal([]byte(`{"version":1,"session":{"auto-start":false}}`), &config); err != nil {
 		t.Fatal(err)
 	}
-	if config.ATrust.Port != 443 || config.Session.AutoStart || config.Routing.Mode != core.RoutingModeRule {
+	if config.ATrust.Port != 443 || config.Session.AutoStart || config.Underlay.AutoDetect || config.Routing.Mode != core.RoutingModeRule {
 		t.Fatalf("config = %#v", config)
 	}
 	if err := json.Unmarshal([]byte(`{"version":1,"unknown":true}`), &config); err == nil {

@@ -2,7 +2,8 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/Go-1.25.6-00ADD8?logo=go&logoColor=white" alt="Go 1.25.6">
-  <img src="https://img.shields.io/badge/release-v0.1.0--alpha-orange" alt="v0.1.0-alpha">
+  <a href="https://github.com/Eclipsky1337/zju-portal-core/actions/workflows/ci.yml"><img src="https://github.com/Eclipsky1337/zju-portal-core/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI"></a>
+  <a href="https://github.com/Eclipsky1337/zju-portal-core/releases"><img src="https://img.shields.io/github/v/release/Eclipsky1337/zju-portal-core?include_prereleases" alt="Release"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-AGPL--3.0-blue" alt="AGPL-3.0"></a>
 </p>
 
@@ -18,6 +19,8 @@
 - 提供 REST、SSE 和标准输入输出 JSONL 控制接口。
 
 ## Quick Start
+
+从 [GitHub Releases](https://github.com/Eclipsky1337/zju-portal-core/releases) 下载对应平台的压缩包，解压后准备配置文件并启动：
 
 ```bash
 ./zju-portal-core --config config.yaml

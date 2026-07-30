@@ -1,0 +1,104 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Build and publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Verify release version
+        shell: bash
+        run: |
+          actual_version="$(go run . --version)"
+          if [[ "$actual_version" != "$GITHUB_REF_NAME" ]]; then
+            echo "tag $GITHUB_REF_NAME does not match Core version $actual_version" >&2
+            exit 1
+          fi
+
+      - name: Run tests
+        run: go test ./...
+
+      - name: Build release archives
+        shell: bash
+        env:
+          COMMIT_ID: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+
+          mkdir -p dist
+          short_commit="${COMMIT_ID:0:7}"
+
+          build_target() {
+            local goos="$1"
+            local goarch="$2"
+            local extension="$3"
+            local package_name="zju-portal-core_${GITHUB_REF_NAME}_${goos}_${goarch}"
+            local package_dir="dist/${package_name}"
+
+            mkdir -p "${package_dir}/docs"
+            CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" go build \
+              -trimpath \
+              -ldflags="-s -w -X main.CommitID=${short_commit}" \
+              -o "${package_dir}/zju-portal-core${extension}" \
+              .
+            cp README.md LICENSE "${package_dir}/"
+            cp docs/config.yaml docs/control-api.md "${package_dir}/docs/"
+
+            if [[ "$goos" == "windows" ]]; then
+              (cd dist && zip -qr "${package_name}.zip" "${package_name}")
+            else
+              tar -C dist -czf "dist/${package_name}.tar.gz" "${package_name}"
+            fi
+            rm -rf "$package_dir"
+          }
+
+          build_target darwin amd64 ""
+          build_target darwin arm64 ""
+          build_target linux amd64 ""
+          build_target linux arm64 ""
+          build_target windows amd64 ".exe"
+          build_target windows arm64 ".exe"
+
+          cd dist
+          sha256sum ./*.tar.gz ./*.zip > checksums.txt
+
+      - name: Publish GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          release_args=(
+            --verify-tag
+            --title "ZJU Portal Core ${GITHUB_REF_NAME}"
+            --generate-notes
+          )
+          if [[ "$GITHUB_REF_NAME" == *-* ]]; then
+            release_args+=(--prerelease)
+          fi
+
+          gh release create "$GITHUB_REF_NAME" "${release_args[@]}" dist/*

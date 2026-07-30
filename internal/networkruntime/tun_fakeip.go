@@ -6,15 +6,25 @@ import (
 	"net/netip"
 	"strings"
 	"sync"
+	"time"
 )
 
-const defaultTUNFakeIPRange = "198.18.0.0/16"
+const (
+	defaultTUNFakeIPRange = "198.18.0.0/16"
+	fakeIPReuseAfter      = 30 * time.Minute
+)
+
+type fakeIPEntry struct {
+	domain   string
+	address  netip.Addr
+	lastUsed time.Time
+}
 
 type fakeIPStore struct {
-	mu         sync.RWMutex
+	mu         sync.Mutex
 	prefix     netip.Prefix
-	domainToIP map[string]netip.Addr
-	ipToDomain map[netip.Addr]string
+	domainToIP map[string]*fakeIPEntry
+	ipToDomain map[netip.Addr]*fakeIPEntry
 	next       uint32
 	last       uint32
 }
@@ -32,8 +42,8 @@ func newFakeIPStore(prefixText string) (*fakeIPStore, error) {
 	count := uint64(1) << uint64(32-prefix.Bits())
 	return &fakeIPStore{
 		prefix:     prefix,
-		domainToIP: make(map[string]netip.Addr),
-		ipToDomain: make(map[netip.Addr]string),
+		domainToIP: make(map[string]*fakeIPEntry),
+		ipToDomain: make(map[netip.Addr]*fakeIPEntry),
 		next:       base + 2,
 		last:       uint32(uint64(base) + count - 2),
 	}, nil
@@ -41,18 +51,29 @@ func newFakeIPStore(prefixText string) (*fakeIPStore, error) {
 
 func (store *fakeIPStore) Assign(domain string) (netip.Addr, error) {
 	domain = normalizeDomain(domain)
+	now := time.Now()
 	store.mu.Lock()
 	defer store.mu.Unlock()
-	if address, ok := store.domainToIP[domain]; ok {
-		return address, nil
+	if entry := store.domainToIP[domain]; entry != nil {
+		entry.lastUsed = now
+		return entry.address, nil
 	}
 	if store.next > store.last {
-		return netip.Addr{}, fmt.Errorf("TUN fake IP range %s is exhausted", store.prefix)
+		entry := store.oldestReusable(now)
+		if entry == nil {
+			return netip.Addr{}, fmt.Errorf("TUN fake IP range %s is exhausted", store.prefix)
+		}
+		delete(store.domainToIP, entry.domain)
+		entry.domain = domain
+		entry.lastUsed = now
+		store.domainToIP[domain] = entry
+		return entry.address, nil
 	}
 	address := uint32ToAddr(store.next)
 	store.next++
-	store.domainToIP[domain] = address
-	store.ipToDomain[address] = domain
+	entry := &fakeIPEntry{domain: domain, address: address, lastUsed: now}
+	store.domainToIP[domain] = entry
+	store.ipToDomain[address] = entry
 	return address, nil
 }
 
@@ -61,10 +82,26 @@ func (store *fakeIPStore) Lookup(address netip.Addr) (string, bool) {
 		return "", false
 	}
 	address = address.Unmap()
-	store.mu.RLock()
-	domain, ok := store.ipToDomain[address]
-	store.mu.RUnlock()
-	return domain, ok
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	entry := store.ipToDomain[address]
+	if entry == nil {
+		return "", false
+	}
+	entry.lastUsed = time.Now()
+	return entry.domain, true
+}
+
+func (store *fakeIPStore) oldestReusable(now time.Time) *fakeIPEntry {
+	cutoff := now.Add(-fakeIPReuseAfter)
+	var oldest *fakeIPEntry
+	for _, entry := range store.domainToIP {
+		if entry.lastUsed.After(cutoff) || oldest != nil && !entry.lastUsed.Before(oldest.lastUsed) {
+			continue
+		}
+		oldest = entry
+	}
+	return oldest
 }
 
 func normalizeDomain(domain string) string {

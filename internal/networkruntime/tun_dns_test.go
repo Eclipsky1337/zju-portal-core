@@ -242,6 +242,34 @@ func TestFakeIPStoreReturnsStableAddress(t *testing.T) {
 	}
 }
 
+func TestFakeIPStoreReusesOnlyStaleAddressWhenExhausted(t *testing.T) {
+	store, err := newFakeIPStore("198.18.0.0/30")
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := store.Assign("old.example")
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.mu.Lock()
+	store.domainToIP["old.example"].lastUsed = time.Now().Add(-fakeIPReuseAfter - time.Minute)
+	store.mu.Unlock()
+
+	reused, err := store.Assign("new.example")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reused != first {
+		t.Fatalf("reused address = %s, want %s", reused, first)
+	}
+	if _, found := store.domainToIP["old.example"]; found {
+		t.Fatal("stale domain mapping was retained")
+	}
+	if domain, found := store.Lookup(reused); !found || domain != "new.example" {
+		t.Fatalf("reused lookup = %q, %v", domain, found)
+	}
+}
+
 type tunResolverStub struct {
 	ip         net.IP
 	ips        map[string]net.IP

@@ -2,11 +2,9 @@ package tcptunnel
 
 import (
 	"context"
-	"errors"
 	"io"
 	"net"
 	"testing"
-	"time"
 
 	"github.com/Eclipsky1337/zju-portal-core/client"
 	"github.com/Eclipsky1337/zju-portal-core/core"
@@ -25,43 +23,7 @@ func TestStackClassifiesUnsupportedDialOperations(t *testing.T) {
 	}
 }
 
-func TestStackReportsClientHealthFailure(t *testing.T) {
-	wantErr := client.ErrSessionInvalid
-	healthDone := make(chan struct{})
-	stack, err := NewStack(tcptunnelHealthClientStub{
-		tcptunnelClientStub: tcptunnelClientStub{},
-		done:                healthDone,
-		err:                 wantErr,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	result := make(chan error, 1)
-	go func() {
-		result <- stack.RunContext(context.Background())
-	}()
-	close(healthDone)
-
-	select {
-	case err := <-result:
-		if !errors.Is(err, wantErr) {
-			t.Fatalf("RunContext() error = %v, want %v", err, wantErr)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("RunContext() did not report the client health failure")
-	}
-}
-
 type tcptunnelClientStub struct{}
-
-type tcptunnelHealthClientStub struct {
-	tcptunnelClientStub
-	done <-chan struct{}
-	err  error
-}
-
-func (client tcptunnelHealthClientStub) Done() <-chan struct{} { return client.done }
-func (client tcptunnelHealthClientStub) Err() error            { return client.err }
 
 func (tcptunnelClientStub) IP() (net.IP, error)                       { return nil, nil }
 func (tcptunnelClientStub) IPResources() ([]client.IPResource, error) { return nil, nil }

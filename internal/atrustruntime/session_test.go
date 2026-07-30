@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
+	"io"
 	"net"
 	"reflect"
 	"sync"
@@ -560,6 +561,38 @@ func TestMonitorRuntimeContinuesAfterVPNReplacement(t *testing.T) {
 	}
 }
 
+func TestMonitorRuntimeFailsWhenGvisorClientSessionIsInvalid(t *testing.T) {
+	healthDone := make(chan struct{})
+	localConn, remoteConn := net.Pipe()
+	defer remoteConn.Close()
+	vpnClient := healthResourceClientStub{
+		resourceClientStub: resourceClientStub{ip: net.ParseIP("10.0.0.2")},
+		done:               healthDone,
+		err:                clientpkg.ErrSessionInvalid,
+		l3Conn:             localConn,
+	}
+	outbound, err := networkruntime.New(context.Background(), vpnClient, networkruntime.Config{DisableRemoteDNS: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	network := wrapNetwork(outbound)
+	runtime := &Runtime{outbound: network}
+	session := newSession("session-monitor-invalid-gvisor", Config{DisableAutoReconnect: true}, defaultDependencies())
+	session.state = core.SessionStateReady
+	session.runtime = runtime
+	session.network = network
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go session.monitorRuntime(ctx, runtime)
+
+	close(healthDone)
+	events := collectEventsUntil(t, session.Events(), core.EventTypeSessionError)
+	assertEventTypePresent(t, events, core.EventTypeSessionStateChanged)
+	if status := session.Status(); status.State != core.SessionStateFailed {
+		t.Fatalf("session status = %#v, want failed", status)
+	}
+}
+
 func TestMonitorRuntimeFailsWithoutReplacingVPNAfterTUNFailure(t *testing.T) {
 	outbound := newHealthOutboundStub()
 	network := wrapNetwork(outbound)
@@ -1021,6 +1054,19 @@ type healthOutboundStub struct {
 	serviceEvents        chan core.ServiceStatus
 	replaceErr           error
 	replaceCalls         atomic.Int32
+}
+
+type healthResourceClientStub struct {
+	resourceClientStub
+	done   <-chan struct{}
+	err    error
+	l3Conn io.ReadWriteCloser
+}
+
+func (client healthResourceClientStub) Done() <-chan struct{} { return client.done }
+func (client healthResourceClientStub) Err() error            { return client.err }
+func (client healthResourceClientStub) NewL3Conn() (io.ReadWriteCloser, error) {
+	return client.l3Conn, nil
 }
 
 type routingOutboundStub struct {

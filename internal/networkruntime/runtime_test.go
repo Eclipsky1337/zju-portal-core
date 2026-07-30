@@ -71,6 +71,33 @@ func TestTCPTunnelRuntimeReportsClientHealthFailure(t *testing.T) {
 	}
 }
 
+func TestGvisorRuntimeReportsClientHealthFailure(t *testing.T) {
+	wantErr := client.ErrSessionInvalid
+	healthDone := make(chan struct{})
+	localConn, remoteConn := net.Pipe()
+	defer remoteConn.Close()
+	vpnClient := &clientStub{
+		healthDone: healthDone,
+		healthErr:  wantErr,
+		l3Conn:     localConn,
+	}
+	runtime, err := New(context.Background(), vpnClient, Config{DisableRemoteDNS: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runtime.Close(context.Background())
+
+	close(healthDone)
+	select {
+	case <-runtime.Done():
+	case <-time.After(time.Second):
+		t.Fatal("runtime health signal was not closed")
+	}
+	if !errors.Is(runtime.Err(), wantErr) {
+		t.Fatalf("runtime error = %v, want %v", runtime.Err(), wantErr)
+	}
+}
+
 func TestTCPTunnelRuntimeDialsDomainResourceWithoutLocalProxy(t *testing.T) {
 	vpnClient := &clientStub{
 		domainResources: map[string]client.DomainResource{

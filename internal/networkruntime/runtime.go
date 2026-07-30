@@ -269,6 +269,7 @@ func newVPNBackend(ctx context.Context, vpnClient client.Client, config Config) 
 		done:     make(chan struct{}),
 	}
 	go backend.runStack(runCtx)
+	go backend.monitorClientHealth(runCtx, vpnClient)
 	return backend, nil
 }
 
@@ -520,12 +521,33 @@ func (backend *vpnBackend) Err() error {
 func (backend *vpnBackend) runStack(ctx context.Context) {
 	err := backend.stack.RunContext(ctx)
 	if err != nil && !errors.Is(err, context.Canceled) {
-		backend.runMu.Lock()
-		if backend.runErr == nil {
-			backend.runErr = err
-		}
-		backend.runMu.Unlock()
+		backend.fail(err)
+		return
 	}
+	backend.signalDone()
+}
+
+func (backend *vpnBackend) monitorClientHealth(ctx context.Context, vpnClient client.Client) {
+	health, ok := vpnClient.(client.Health)
+	if !ok || health.Done() == nil {
+		return
+	}
+	select {
+	case <-ctx.Done():
+		return
+	case <-health.Done():
+	}
+	if err := health.Err(); err != nil {
+		backend.fail(err)
+	}
+}
+
+func (backend *vpnBackend) fail(err error) {
+	backend.runMu.Lock()
+	if backend.runErr == nil {
+		backend.runErr = err
+	}
+	backend.runMu.Unlock()
 	backend.signalDone()
 }
 

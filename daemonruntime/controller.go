@@ -63,6 +63,47 @@ func (controller *Controller) Config() daemonconfig.Config {
 	return config.Clone()
 }
 
+func (controller *Controller) Start(ctx context.Context, config core.Config) (core.SessionID, error) {
+	controller.operationMu.Lock()
+	defer controller.operationMu.Unlock()
+
+	controller.mu.RLock()
+	initialized := controller.initialized
+	daemonConfig := controller.config.Clone()
+	resumeState := cloneResumeState(controller.resumeState)
+	controller.mu.RUnlock()
+
+	if usesConfiguredSession(config) {
+		if !initialized {
+			return "", core.WrapError(core.ErrorCodeConfigUnavailable, "configuration is not initialized", true, nil)
+		}
+		sessionID := config.SessionID
+		requestedResumeState := config.ResumeState
+		config = daemonConfig.CoreConfig()
+		if sessionID != "" {
+			config.SessionID = sessionID
+		}
+		config.ResumeState = requestedResumeState
+	}
+	if config.ResumeState == nil && resumeStateMatchesConfig(resumeState, config) {
+		config.ResumeState = resumeState
+	}
+
+	id, err := controller.Manager.Start(ctx, config)
+	if err != nil {
+		return id, err
+	}
+	controller.cacheResumeState(id)
+	return id, nil
+}
+
+func (controller *Controller) Stop(ctx context.Context, id core.SessionID) error {
+	controller.operationMu.Lock()
+	defer controller.operationMu.Unlock()
+	controller.cacheResumeState(id)
+	return controller.Manager.Stop(ctx, id)
+}
+
 func (controller *Controller) SetConfig(ctx context.Context, config daemonconfig.Config) error {
 	controller.operationMu.Lock()
 	defer controller.operationMu.Unlock()
@@ -150,6 +191,30 @@ func resumeStateMatchesConfig(state *core.ResumeState, config core.Config) bool 
 	return state.Scope.ServerAddress == config.ServerAddress &&
 		state.Scope.ServerPort == config.ServerPort &&
 		(state.Scope.Username == "" || config.Username == "" || state.Scope.Username == config.Username)
+}
+
+func usesConfiguredSession(config core.Config) bool {
+	config.SessionID = ""
+	config.ResumeState = nil
+	return reflect.DeepEqual(config, core.Config{})
+}
+
+func cloneResumeState(state *core.ResumeState) *core.ResumeState {
+	if state == nil {
+		return nil
+	}
+	cloned := *state
+	return &cloned
+}
+
+func (controller *Controller) cacheResumeState(id core.SessionID) {
+	state, err := controller.Manager.ResumeState(id)
+	if err != nil {
+		return
+	}
+	controller.mu.Lock()
+	controller.resumeState = &state
+	controller.mu.Unlock()
 }
 
 func (controller *Controller) ConfigPath() string { return controller.configPath }

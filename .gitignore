@@ -25,3 +25,4 @@ go.work
 resume-state.json
 *.log
 zju-portal-core
+/data/

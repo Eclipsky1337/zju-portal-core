@@ -322,6 +322,25 @@ api -X POST -H 'Content-Type: application/json' \
 当前进程只维护一个活动 Session。启动新 Session 前会先关闭已有 Session，因此该接口具有
 替换语义，不是创建多个并行 VPN。
 
+Core 由守护进程配置文件启动时，可以省略低层 `config`，直接使用当前已加载配置：
+
+```json
+{}
+```
+
+也可以只覆盖 Session ID，其余字段继续使用当前配置：
+
+```json
+{
+  "config": {
+    "session_id": "default"
+  }
+}
+```
+
+当请求没有显式提供 `resume_state` 时，Core 会自动复用启动时加载或上次停止 Session 前
+缓存的匹配 Resume State。Resume State 的 server、port 和 username 不匹配时不会注入。
+
 可选的 `resume_state` 与 `config` 同级：
 
 ```json

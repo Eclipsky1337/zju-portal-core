@@ -36,6 +36,140 @@ func TestControllerReturnsCompleteConfig(t *testing.T) {
 	}
 }
 
+func TestControllerStartsConfiguredSessionWithInitialResumeState(t *testing.T) {
+	resumeState := core.ResumeState{
+		Format:   core.ResumeStateFormatATrustClientData,
+		Version:  core.ResumeStateVersion1,
+		Revision: 3,
+		Scope: core.ResumeStateScope{
+			ServerAddress: "vpn.example.edu",
+			ServerPort:    443,
+			Username:      "user",
+		},
+		Data: "resume-data",
+	}
+	manager := &controllerManagerStub{resumeState: resumeState}
+	controller := New(manager, "")
+	controller.SetInitialResumeState(&resumeState)
+	config := daemonconfig.Default()
+	config.Session.AutoStart = false
+	config.ATrust.Server = "vpn.example.edu"
+	config.ATrust.Username = "user"
+	config.ATrust.Password = "secret"
+	if err := controller.Initialize(context.Background(), config); err != nil {
+		t.Fatal(err)
+	}
+
+	id, err := controller.Start(context.Background(), core.Config{SessionID: "default"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if id != "default" || len(manager.starts) != 1 {
+		t.Fatalf("start result = %q, calls = %d", id, len(manager.starts))
+	}
+	started := manager.starts[0]
+	if started.ServerAddress != "vpn.example.edu" || started.Username != "user" || started.Password != "secret" {
+		t.Fatalf("start config = %#v", started)
+	}
+	if started.ResumeState == nil || started.ResumeState.Revision != resumeState.Revision {
+		t.Fatalf("resume state = %#v", started.ResumeState)
+	}
+}
+
+func TestControllerExplicitStartUsesInitialResumeState(t *testing.T) {
+	resumeState := core.ResumeState{
+		Format:   core.ResumeStateFormatATrustClientData,
+		Version:  core.ResumeStateVersion1,
+		Revision: 4,
+		Scope:    core.ResumeStateScope{ServerAddress: "vpn.example.edu", ServerPort: 443},
+		Data:     "resume-data",
+	}
+	manager := &controllerManagerStub{resumeState: resumeState}
+	controller := New(manager, "")
+	controller.SetInitialResumeState(&resumeState)
+
+	_, err := controller.Start(context.Background(), core.Config{
+		Protocol:      "atrust",
+		SessionID:     "default",
+		ServerAddress: "vpn.example.edu",
+		ServerPort:    443,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := manager.starts[0].ResumeState; got == nil || got.Revision != resumeState.Revision {
+		t.Fatalf("resume state = %#v", got)
+	}
+}
+
+func TestControllerConfiguredStartPrefersExplicitResumeState(t *testing.T) {
+	configuredState := core.ResumeState{
+		Format:  core.ResumeStateFormatATrustClientData,
+		Version: core.ResumeStateVersion1,
+		Scope:   core.ResumeStateScope{ServerAddress: "vpn.example.edu", ServerPort: 443},
+		Data:    "configured-state",
+	}
+	explicitState := configuredState
+	explicitState.Revision = 9
+	explicitState.Data = "explicit-state"
+	manager := &controllerManagerStub{resumeState: explicitState}
+	controller := New(manager, "")
+	controller.SetInitialResumeState(&configuredState)
+	config := daemonconfig.Default()
+	config.Session.AutoStart = false
+	config.ATrust.Server = "vpn.example.edu"
+	if err := controller.Initialize(context.Background(), config); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := controller.Start(context.Background(), core.Config{
+		SessionID:   "default",
+		ResumeState: &explicitState,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	started := manager.starts[0]
+	if started.ServerAddress != "vpn.example.edu" || started.ResumeState == nil || started.ResumeState.Revision != 9 {
+		t.Fatalf("start config = %#v", started)
+	}
+}
+
+func TestControllerStopCachesResumeStateForNextStart(t *testing.T) {
+	manager := &controllerManagerStub{}
+	controller := New(manager, "")
+	config := daemonconfig.Default()
+	config.Session.AutoStart = false
+	config.ATrust.Server = "vpn.example.edu"
+	config.ATrust.Username = "user"
+	if err := controller.Initialize(context.Background(), config); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := controller.Start(context.Background(), core.Config{SessionID: "default"}); err != nil {
+		t.Fatal(err)
+	}
+	manager.resumeState = core.ResumeState{
+		Format:   core.ResumeStateFormatATrustClientData,
+		Version:  core.ResumeStateVersion1,
+		Revision: 5,
+		Scope: core.ResumeStateScope{
+			ServerAddress: "vpn.example.edu",
+			ServerPort:    443,
+			Username:      "user",
+		},
+		Data: "updated-resume-data",
+	}
+	if err := controller.Stop(context.Background(), "default"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := controller.Start(context.Background(), core.Config{SessionID: "default"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := manager.starts[1].ResumeState; got == nil || got.Revision != 5 {
+		t.Fatalf("resume state = %#v", got)
+	}
+}
+
 func TestControllerReloadRequiresPath(t *testing.T) {
 	controller := New(coremanager.New(), "")
 	if err := controller.ReloadConfig(context.Background()); core.ErrorCodeOf(err) != core.ErrorCodeConfigUnavailable {
@@ -126,6 +260,8 @@ func (manager *controllerManagerStub) Start(_ context.Context, config core.Confi
 	}
 	return config.SessionID, nil
 }
+
+func (*controllerManagerStub) Stop(context.Context, core.SessionID) error { return nil }
 
 func (manager *controllerManagerStub) ResumeState(core.SessionID) (core.ResumeState, error) {
 	if manager.resumeState.Data == "" {

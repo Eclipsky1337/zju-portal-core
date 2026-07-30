@@ -3,6 +3,8 @@ package daemonruntime
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/Eclipsky1337/zju-portal-core/core"
@@ -18,7 +20,6 @@ func TestControllerSetConfigStoresDesiredWithoutRestartingSession(t *testing.T) 
 	}
 
 	updated := config.Clone()
-	updated.Session.AutoStart = false
 	updated.DNS.Remote.Server = "10.0.0.1"
 	updated.Routing.Mode = core.RoutingModeGlobal
 	snapshot, err := controller.SetConfig(context.Background(), updated)
@@ -30,9 +31,6 @@ func TestControllerSetConfigStoresDesiredWithoutRestartingSession(t *testing.T) 
 	}
 	if len(manager.routingModes) != 1 || manager.routingModes[0] != core.RoutingModeGlobal {
 		t.Fatalf("routing modes = %#v", manager.routingModes)
-	}
-	if snapshot.Configured.Session.AutoStart || snapshot.Active.Session.AutoStart {
-		t.Fatalf("auto-start changed runtime state: %#v", snapshot)
 	}
 	if snapshot.Active.DNS.Remote.Server == updated.DNS.Remote.Server {
 		t.Fatal("session-scoped DNS config was applied without restart")
@@ -66,23 +64,24 @@ func TestControllerApplyConfigRestartsActiveSession(t *testing.T) {
 }
 
 func TestControllerApplyConfigPreservesCoreRestartChanges(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte("version: 1\nsession:\n  auto-start: true\natrust:\n  server: vpn.example.edu\n  username: user\ndns:\n  remote:\n    server: 10.0.0.1\ninbounds:\n  tun:\n    mtu: 1300\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	manager := &controllerManagerStub{}
-	controller := New(manager, "")
-	config := testConfig(false)
+	controller := New(manager, path)
+	config := testConfig(true)
 	if err := controller.Initialize(context.Background(), config); err != nil {
 		t.Fatal(err)
 	}
-	updated := config.Clone()
-	updated.Inbounds.TUN.MTU = 1300
-	updated.DNS.Remote.Server = "10.0.0.1"
-	if _, err := controller.SetConfig(context.Background(), updated); err != nil {
+	if _, err := controller.ReloadConfig(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	snapshot, err := controller.ApplyConfig(context.Background(), daemonconfig.ApplyModeRestartSession)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if snapshot.Active.DNS.Remote.Server != updated.DNS.Remote.Server {
+	if snapshot.Active.DNS.Remote.Server != "10.0.0.1" {
 		t.Fatal("session config was not activated")
 	}
 	if snapshot.Active.Inbounds.TUN.MTU != config.Inbounds.TUN.MTU {
@@ -174,6 +173,47 @@ func TestControllerPatchConfigPreservesOmittedFields(t *testing.T) {
 	if snapshot.Configured.Session.AutoReconnect || snapshot.Configured.ATrust.Server != config.ATrust.Server {
 		t.Fatalf("configured = %#v", snapshot.Configured)
 	}
+}
+
+func TestControllerRejectsCoreChangesFromConfigAPI(t *testing.T) {
+	manager := &controllerManagerStub{}
+	controller := New(manager, "")
+	config := testConfig(false)
+	if err := controller.Initialize(context.Background(), config); err != nil {
+		t.Fatal(err)
+	}
+	updated := config.Clone()
+	updated.Session.AutoStart = true
+	updated.Inbounds.TUN.MTU = 1300
+	updated.DNS.Remote.Server = "10.0.0.1"
+	snapshot, err := controller.SetConfig(context.Background(), updated)
+	if core.ErrorCodeOf(err) != core.ErrorCodeRestartRequired {
+		t.Fatalf("SetConfig() error = %v", err)
+	}
+	if snapshot.Configured.Inbounds.TUN.MTU != config.Inbounds.TUN.MTU || snapshot.Configured.DNS.Remote.Server != config.DNS.Remote.Server {
+		t.Fatalf("configuration was partially modified: %#v", snapshot.Configured)
+	}
+}
+
+func TestControllerReloadAllowsPersistedCoreChanges(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte("version: 1\nsession:\n  auto-start: false\ninbounds:\n  tun:\n    mtu: 1300\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	manager := &controllerManagerStub{}
+	controller := New(manager, path)
+	config := testConfig(false)
+	if err := controller.Initialize(context.Background(), config); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := controller.ReloadConfig(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.Configured.Inbounds.TUN.MTU != 1300 || snapshot.Active.Inbounds.TUN.MTU != config.Inbounds.TUN.MTU {
+		t.Fatalf("snapshot = %#v", snapshot)
+	}
+	assertPending(t, snapshot.Pending, "inbounds.tun.mtu", daemonconfig.ApplyRequirementCoreRestart)
 }
 
 func TestControllerReloadRequiresPath(t *testing.T) {

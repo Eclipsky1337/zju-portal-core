@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"reflect"
+	"strings"
 	"sync"
 
 	"github.com/Eclipsky1337/zju-portal-core/core"
@@ -91,7 +92,7 @@ func (controller *Controller) ConfigSnapshot() daemonconfig.Snapshot {
 func (controller *Controller) SetConfig(ctx context.Context, config daemonconfig.Config) (daemonconfig.Snapshot, error) {
 	controller.operationMu.Lock()
 	defer controller.operationMu.Unlock()
-	return controller.setConfigLocked(ctx, config)
+	return controller.setConfigLocked(ctx, config, false)
 }
 
 func (controller *Controller) PatchConfig(ctx context.Context, patch []byte) (daemonconfig.Snapshot, error) {
@@ -108,7 +109,7 @@ func (controller *Controller) PatchConfig(ctx context.Context, patch []byte) (da
 	if err != nil {
 		return daemonconfig.Snapshot{}, core.WrapError(core.ErrorCodeConfigInvalid, "merge configuration patch", false, err)
 	}
-	return controller.setConfigLocked(ctx, config)
+	return controller.setConfigLocked(ctx, config, false)
 }
 
 func (controller *Controller) ReloadConfig(ctx context.Context) (daemonconfig.Snapshot, error) {
@@ -119,7 +120,9 @@ func (controller *Controller) ReloadConfig(ctx context.Context) (daemonconfig.Sn
 	if err != nil {
 		return daemonconfig.Snapshot{}, core.WrapError(core.ErrorCodeConfigInvalid, "reload configuration", false, err)
 	}
-	return controller.SetConfig(ctx, config)
+	controller.operationMu.Lock()
+	defer controller.operationMu.Unlock()
+	return controller.setConfigLocked(ctx, config, true)
 }
 
 func (controller *Controller) ApplyConfig(ctx context.Context, mode daemonconfig.ApplyMode) (daemonconfig.Snapshot, error) {
@@ -239,7 +242,7 @@ func (controller *Controller) SetRoutingMode(id core.SessionID, mode core.Routin
 	return nil
 }
 
-func (controller *Controller) setConfigLocked(ctx context.Context, config daemonconfig.Config) (daemonconfig.Snapshot, error) {
+func (controller *Controller) setConfigLocked(ctx context.Context, config daemonconfig.Config, allowCoreChanges bool) (daemonconfig.Snapshot, error) {
 	if err := config.Validate(); err != nil {
 		return daemonconfig.Snapshot{}, core.WrapError(core.ErrorCodeConfigInvalid, "validate configuration", false, err)
 	}
@@ -255,6 +258,22 @@ func (controller *Controller) setConfigLocked(ctx context.Context, config daemon
 	if reflect.DeepEqual(config, configured) {
 		return controller.ConfigSnapshot(), nil
 	}
+	if !allowCoreChanges {
+		var paths []string
+		for _, change := range daemonconfig.Changes(configured, config) {
+			if change.Requires == daemonconfig.ApplyRequirementCoreRestart {
+				paths = append(paths, change.Path)
+			}
+		}
+		if len(paths) != 0 {
+			return controller.ConfigSnapshot(), core.WrapError(
+				core.ErrorCodeRestartRequired,
+				"Core configuration must be changed in the configuration file and Core restarted",
+				false,
+				fmt.Errorf("core restart required for %s", strings.Join(paths, ", ")),
+			)
+		}
+	}
 
 	activeChanged := false
 	if config.Routing.Mode != active.Routing.Mode {
@@ -264,10 +283,6 @@ func (controller *Controller) setConfigLocked(ctx context.Context, config daemon
 			}
 		}
 		active.Routing.Mode = config.Routing.Mode
-		activeChanged = true
-	}
-	if active.Session.AutoStart != config.Session.AutoStart {
-		active.Session.AutoStart = config.Session.AutoStart
 		activeChanged = true
 	}
 	if activeSessionID == "" {
@@ -319,6 +334,7 @@ func sessionConfigCandidate(active, configured daemonconfig.Config) daemonconfig
 	candidate := configured.Clone()
 	candidate.Log = active.Log
 	candidate.Control = active.Control
+	candidate.Session.AutoStart = active.Session.AutoStart
 	candidate.State = active.State
 	candidate.Inbounds.TUN = active.Inbounds.TUN
 	return candidate

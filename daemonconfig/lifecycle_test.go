@@ -17,10 +17,11 @@ func TestChangesClassifiesConfigurationFields(t *testing.T) {
 
 	changes := Changes(active, configured)
 	want := map[string]ApplyRequirement{
-		"log.level":         ApplyRequirementCoreRestart,
-		"routing.mode":      ApplyRequirementLive,
-		"dns.remote.server": ApplyRequirementSessionRestart,
-		"inbounds.tun.mtu":  ApplyRequirementCoreRestart,
+		"log.level":          ApplyRequirementCoreRestart,
+		"routing.mode":       ApplyRequirementLive,
+		"session.auto-start": ApplyRequirementCoreRestart,
+		"dns.remote.server":  ApplyRequirementSessionRestart,
+		"inbounds.tun.mtu":   ApplyRequirementCoreRestart,
 	}
 	if len(changes) != len(want) {
 		t.Fatalf("changes = %#v", changes)

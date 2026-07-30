@@ -40,9 +40,6 @@ func Changes(active, configured Config) []Change {
 	collectChanges(reflect.ValueOf(active), reflect.ValueOf(configured), "", &paths)
 	changes := make([]Change, 0, len(paths))
 	for _, path := range paths {
-		if path == "session.auto-start" {
-			continue
-		}
 		changes = append(changes, Change{Path: path, Requires: requirementForPath(path)})
 	}
 	sort.Slice(changes, func(i, j int) bool { return changes[i].Path < changes[j].Path })
@@ -83,6 +80,7 @@ func requirementForPath(path string) ApplyRequirement {
 		return ApplyRequirementLive
 	case strings.HasPrefix(path, "control."),
 		strings.HasPrefix(path, "log."),
+		path == "session.auto-start",
 		strings.HasPrefix(path, "state."),
 		strings.HasPrefix(path, "inbounds.tun."):
 		return ApplyRequirementCoreRestart

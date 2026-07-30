@@ -31,7 +31,7 @@ session:
   id: default
 
   # 启动 Core 时是否自动建立 aTrust Session
-  # 运行期间修改此字段不会自动启动或停止当前 Session
+  # 该字段只能通过修改配置文件并重启 Core 生效
   auto-start: true
 
   # VPN 网络后端异常或当前登录失效时是否自动重连

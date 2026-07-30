@@ -229,7 +229,7 @@ api "$API/config" | jq .result
 }
 ```
 
-- `configured`：通过配置文件或配置 API 设置的目标配置；
+- `configured`：通过配置文件或配置 API 设置的内存目标配置；
 - `active`：当前 Core 服务和 Session 实际使用的配置快照；
 - `revision`、`active_revision`：两个快照各自的单调递增版本；
 - `pending`：尚未应用的字段及其所需操作，可能为 `session_restart` 或
@@ -256,11 +256,20 @@ api -X PUT -H 'Content-Type: application/json' \
 ```
 
 该接口执行完整 configured 配置替换。省略字段使用默认值，配置校验失败时返回
-`CONFIG_INVALID`。它不会根据 `session.auto-start` 隐式启动或停止 Session，也不会静默重启
-当前 Session。
+`CONFIG_INVALID`。它不会静默重启当前 Session。
 
-`routing.mode` 会立即同步到活动 Session；其他差异保留在 `pending` 中。`session.auto-start`
-只决定 Core 进程启动时是否自动建立 Session，运行期间修改该字段不会改变当前 Session。
+`routing.mode` 会立即同步到活动 Session；Session 级差异保留在 `pending` 中。如果请求包含
+需要重启 Core 才能生效的字段，整个请求返回 `RESTART_REQUIRED`，并且不会部分修改其他
+字段。受限制的字段包括：
+
+- `session.auto-start`；
+- `control.*`；
+- `log.*`；
+- `state.resume-file`；
+- `inbounds.tun.*`。
+
+这些字段必须直接修改启动时使用的 YAML 文件，再重启 Core。Core 不会通过控制 API
+自动重写 YAML 文件。
 
 ### 4.3 部分修改配置
 
@@ -276,7 +285,8 @@ Content-Type: application/json
 ```
 
 PATCH 使用与配置文件相同的嵌套字段结构。未出现的字段保持不变，布尔值 `false` 和空字符串
-会被视为明确修改。未知字段或合并后的无效配置会返回 `CONFIG_INVALID`。
+会被视为明确修改。未知字段或合并后的无效配置会返回 `CONFIG_INVALID`。PATCH 对 Core
+重启字段的限制与 PUT 相同，并且按整个请求原子拒绝。
 
 ### 4.4 显式应用 Session 配置
 
@@ -293,8 +303,8 @@ Content-Type: application/json
 Session；失败时尝试恢复之前的 active 配置和 Resume State。当 Session 未运行时，只更新
 active Session 配置，之后的 `POST /sessions` 会使用它。
 
-`control.*`、`log.*`、`state.resume-file` 和 `inbounds.tun.*` 当前仍需要重启 Core，调用本接口
-后会继续显示在 `pending` 中。
+由 `config.reload` 读入的 `session.auto-start`、`control.*`、`log.*`、`state.resume-file` 和
+`inbounds.tun.*` 仍需要重启 Core，调用本接口后会继续显示在 `pending` 中。
 
 ### 4.5 从文件重新加载
 
@@ -304,7 +314,8 @@ POST /api/v1/config/reload
 
 只有通过 `--config` 或 `-f` 指定配置文件时可用，否则返回 `CONFIG_UNAVAILABLE`。
 它只更新 configured 配置并应用 live 字段，返回值与 `GET /config` 相同，不会根据
-`auto-start` 隐式启停 Session。
+`auto-start` 隐式启停 Session。由于配置已经由调用方写入磁盘，返回的 `core_restart`
+pending 可以通过重启 Core 正常生效。
 
 ## 5. Session 管理
 

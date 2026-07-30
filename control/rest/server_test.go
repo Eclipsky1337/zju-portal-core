@@ -57,6 +57,22 @@ func TestRESTConfigurationEndpoints(t *testing.T) {
 		t.Fatalf("set calls = %d", manager.setCalls)
 	}
 
+	patch := httptest.NewRequest(http.MethodPatch, APIBasePath+"/config", strings.NewReader(`{"session":{"auto-reconnect":false}}`))
+	patch.Header.Set("Authorization", "Bearer secret")
+	patchRecorder := httptest.NewRecorder()
+	server.ServeHTTP(patchRecorder, patch)
+	if patchRecorder.Code != http.StatusOK || manager.patchCalls != 1 || manager.config.Session.AutoReconnect {
+		t.Fatalf("patch status/calls/config = %d/%d/%#v", patchRecorder.Code, manager.patchCalls, manager.config.Session)
+	}
+
+	apply := httptest.NewRequest(http.MethodPost, APIBasePath+"/config/apply", strings.NewReader(`{"mode":"restart-session"}`))
+	apply.Header.Set("Authorization", "Bearer secret")
+	applyRecorder := httptest.NewRecorder()
+	server.ServeHTTP(applyRecorder, apply)
+	if applyRecorder.Code != http.StatusOK || manager.applyCalls != 1 {
+		t.Fatalf("apply status/calls = %d/%d", applyRecorder.Code, manager.applyCalls)
+	}
+
 	get := httptest.NewRequest(http.MethodGet, APIBasePath+"/config", nil)
 	get.Header.Set("Authorization", "Bearer secret")
 	getRecorder := httptest.NewRecorder()
@@ -71,6 +87,19 @@ func TestRESTConfigurationEndpoints(t *testing.T) {
 	server.ServeHTTP(reloadRecorder, reload)
 	if reloadRecorder.Code != http.StatusOK || manager.reloadCalls != 1 {
 		t.Fatalf("reload status/calls = %d/%d", reloadRecorder.Code, manager.reloadCalls)
+	}
+}
+
+func TestRESTMapsAlreadyRunningSessionToConflict(t *testing.T) {
+	manager := newManagerStub()
+	manager.startErr = core.WrapError(core.ErrorCodeSessionAlreadyRunning, "session is already running", false, nil)
+	server := NewServer(controlv1.NewService(manager, "test", nil), "secret")
+	request := httptest.NewRequest(http.MethodPost, APIBasePath+"/sessions", strings.NewReader(`{}`))
+	request.Header.Set("Authorization", "Bearer secret")
+	recorder := httptest.NewRecorder()
+	server.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusConflict {
+		t.Fatalf("status/body = %d/%s", recorder.Code, recorder.Body.String())
 	}
 }
 
@@ -358,6 +387,7 @@ type managerStub struct {
 	routingMode    core.RoutingMode
 	refreshCalls   int
 	refreshSession core.SessionID
+	startErr       error
 }
 
 func newManagerStub() *managerStub {
@@ -365,6 +395,9 @@ func newManagerStub() *managerStub {
 }
 
 func (manager *managerStub) Start(ctx context.Context, config core.Config) (core.SessionID, error) {
+	if manager.startErr != nil {
+		return "", manager.startErr
+	}
 	id := config.SessionID
 	if id == "" {
 		id = "default"

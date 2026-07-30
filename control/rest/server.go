@@ -353,7 +353,7 @@ func statusForError(err *core.Error) int {
 		return http.StatusBadRequest
 	case core.ErrorCodeSessionNotFound, core.ErrorCodeAuthChallengeNotFound, core.ErrorCodeConnectionNotFound:
 		return http.StatusNotFound
-	case core.ErrorCodeSessionNotReady, core.ErrorCodeSessionStartFailed, core.ErrorCodeSessionCloseFailed, core.ErrorCodeRestartRequired:
+	case core.ErrorCodeSessionNotReady, core.ErrorCodeSessionAlreadyRunning, core.ErrorCodeSessionStartFailed, core.ErrorCodeSessionCloseFailed, core.ErrorCodeRestartRequired:
 		return http.StatusConflict
 	case core.ErrorCodeAddressInUse:
 		return http.StatusConflict

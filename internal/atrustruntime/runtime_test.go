@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	goruntime "runtime"
 	"strings"
 	"syscall"
 	"testing"
@@ -123,7 +124,7 @@ func TestStartLoadsResourceAndPersistsClientData(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Mode().Perm() != 0600 {
+	if goruntime.GOOS != "windows" && info.Mode().Perm() != 0600 {
 		t.Fatalf("client data mode = %o", info.Mode().Perm())
 	}
 }

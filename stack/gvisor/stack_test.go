@@ -6,6 +6,9 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"gvisor.dev/gvisor/pkg/buffer"
+	"gvisor.dev/gvisor/pkg/tcpip/stack"
 )
 
 func TestStackCloseIsIdempotent(t *testing.T) {
@@ -79,6 +82,33 @@ func TestEndpointFailureClosesConnectionAndPreservesError(t *testing.T) {
 	}
 }
 
+func TestEndpointWriteFailureDoesNotTerminateEndpoint(t *testing.T) {
+	wantErr := errors.New("network temporarily unavailable")
+	conn := &writeStub{err: wantErr}
+	endpoint := &Endpoint{l3Conn: conn}
+	packet := stack.NewPacketBuffer(stack.PacketBufferOptions{Payload: buffer.MakeWithData([]byte{1, 2, 3})})
+	defer packet.DecRef()
+	var packets stack.PacketBufferList
+	packets.PushBack(packet)
+
+	written, tcpipErr := endpoint.WritePackets(packets)
+	if written != 0 || tcpipErr == nil {
+		t.Fatalf("first WritePackets() = %d, %v", written, tcpipErr)
+	}
+	if err := endpoint.terminalError(); err != nil {
+		t.Fatalf("terminal error = %v, want nil", err)
+	}
+	if got := conn.closeCount.Load(); got != 0 {
+		t.Fatalf("connection close count = %d, want 0", got)
+	}
+
+	conn.err = nil
+	written, tcpipErr = endpoint.WritePackets(packets)
+	if written != 1 || tcpipErr != nil {
+		t.Fatalf("second WritePackets() = %d, %v", written, tcpipErr)
+	}
+}
+
 type closeStub struct {
 	release    <-chan struct{}
 	closeCount atomic.Int32
@@ -91,5 +121,22 @@ func (conn *closeStub) Close() error {
 	if conn.release != nil {
 		<-conn.release
 	}
+	return nil
+}
+
+type writeStub struct {
+	err        error
+	closeCount atomic.Int32
+}
+
+func (*writeStub) Read([]byte) (int, error) { return 0, nil }
+func (conn *writeStub) Write(data []byte) (int, error) {
+	if conn.err != nil {
+		return 0, conn.err
+	}
+	return len(data), nil
+}
+func (conn *writeStub) Close() error {
+	conn.closeCount.Add(1)
 	return nil
 }

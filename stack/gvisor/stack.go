@@ -103,7 +103,7 @@ func (ep *Endpoint) WritePackets(list stack.PacketBufferList) (int, tcpip.Error)
 					log.Printf("%v", err)
 					continue
 				}
-				ep.fail(err)
+				log.DebugPrintf("Drop packet after L3 write failed: %v", err)
 				return index, &tcpip.ErrAborted{}
 			}
 			log.DebugPrintf("Send: wrote %d bytes", n)

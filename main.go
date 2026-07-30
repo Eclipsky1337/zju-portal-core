@@ -59,7 +59,7 @@ func main() {
 	}
 }
 
-func runDaemon(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer, newManager func() core.Manager) error {
+func runDaemon(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer, newManager func() core.Manager) (returnErr error) {
 	options, err := parseDaemonOptions(args, stderr)
 	if err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -119,15 +119,15 @@ func runDaemon(ctx context.Context, args []string, stdin io.Reader, stdout, stde
 		controller.SetInitialResumeState(resumeState)
 	}
 	service := controlv1.NewService(controller, coreVersion(), controlCapabilities)
+	var restServer *http.Server
+	defer func() {
+		returnErr = errors.Join(returnErr, shutdownControl(restServer, service))
+	}()
 	if config.State.ResumeFile != "" {
 		go persistResumeStateEvents(ctx, service.Subscribe(ctx), manager, config.State.ResumeFile)
 	}
-	shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), daemonShutdownTimeout)
-	defer cancelShutdown()
-	defer service.Close(shutdownCtx)
 
 	errCh := make(chan error, 4)
-	var restServer *http.Server
 	if config.Control.REST.Enabled {
 		restServer, err = startRESTServer(ctx, service, config.Control.REST, stderr, errCh)
 		if err != nil {
@@ -151,10 +151,30 @@ func runDaemon(ctx context.Context, args []string, stdin io.Reader, stdout, stde
 			return runErr
 		}
 	}
-	if restServer != nil {
-		return restServer.Shutdown(shutdownCtx)
-	}
 	return nil
+}
+
+func shutdownControl(restServer *http.Server, service *controlv1.Service) error {
+	shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), daemonShutdownTimeout)
+	defer cancelShutdown()
+
+	var restDone <-chan error
+	if restServer != nil {
+		done := make(chan error, 1)
+		restDone = done
+		go func() {
+			done <- restServer.Shutdown(shutdownCtx)
+		}()
+	}
+	serviceErr := service.Close(shutdownCtx)
+	var restErr error
+	if restDone != nil {
+		restErr = <-restDone
+	}
+	if errors.Is(restErr, http.ErrServerClosed) {
+		restErr = nil
+	}
+	return errors.Join(restErr, serviceErr)
 }
 
 func parseDaemonOptions(args []string, output io.Writer) (daemonOptions, error) {

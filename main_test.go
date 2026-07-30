@@ -116,6 +116,65 @@ func TestDaemonRESTBootstrapWithoutConfig(t *testing.T) {
 	}
 }
 
+func TestDaemonRESTShutdownDoesNotWaitForSSETimeout(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	address := listener.Addr().String()
+	if err := listener.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	var stderr synchronizedBuffer
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- runDaemon(ctx, []string{"--rest", address}, strings.NewReader(""), io.Discard, &stderr, func() core.Manager { return coremanager.New() })
+	}()
+
+	client := &http.Client{Timeout: 2 * time.Second}
+	var response *http.Response
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		secret := restToken(stderr.String())
+		if secret == "" {
+			time.Sleep(10 * time.Millisecond)
+			continue
+		}
+		request, requestErr := http.NewRequest(http.MethodGet, "http://"+address+"/api/v1/events?access_token="+secret, nil)
+		if requestErr != nil {
+			t.Fatal(requestErr)
+		}
+		response, err = client.Do(request)
+		if err == nil {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if response == nil {
+		cancel()
+		t.Fatalf("open REST event stream: %v; stderr=%q", err, stderr.String())
+	}
+	defer response.Body.Close()
+
+	cancel()
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("REST shutdown waited for the full timeout with an active SSE stream")
+	}
+
+	rebound, err := net.Listen("tcp", address)
+	if err != nil {
+		t.Fatalf("REST address was not released: %v", err)
+	}
+	_ = rebound.Close()
+}
+
 type synchronizedBuffer struct {
 	mu     sync.Mutex
 	buffer bytes.Buffer

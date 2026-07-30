@@ -37,6 +37,9 @@
 
 完整配置示例位于 [docs/config.yaml](docs/config.yaml)
 
+`session.auto-reconnect` 默认启用。若同一账号在其他设备登录，Core 会在检测到当前登录失效后尝试重新认证，
+可能反过来使另一台设备掉线；需要在多台设备间主动切换时，建议先停止原 Session 或关闭自动重连。
+
 ## Docs
 
 - [Control API 指引](docs/control-api.md)

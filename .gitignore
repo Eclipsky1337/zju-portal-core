@@ -22,7 +22,6 @@ go.work
 .idea/
 
 # Local runtime files
-config.yaml
 resume-state.json
 *.log
 zju-portal-core

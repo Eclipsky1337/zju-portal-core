@@ -34,7 +34,6 @@ func TestSessionStateFailureAndReconnectTransitions(t *testing.T) {
 		to   SessionState
 	}{
 		{SessionStateReady, SessionStateReconnecting},
-		{SessionStateReconnecting, SessionStateEstablishingTunnel},
 		{SessionStateReconnecting, SessionStateReady},
 		{SessionStateAuthenticating, SessionStateFailed},
 		{SessionStateFailed, SessionStateStopping},
@@ -56,6 +55,8 @@ func TestSessionStateRejectsInvalidTransitions(t *testing.T) {
 		{SessionStateReady, SessionStateAuthenticating},
 		{SessionStateStopped, SessionStateIdle},
 		{SessionStateReady, SessionStateReady},
+		{SessionStateEstablishingTunnel, SessionStateReconnecting},
+		{SessionStateReconnecting, SessionStateEstablishingTunnel},
 		{"unknown", SessionStateStopping},
 	}
 

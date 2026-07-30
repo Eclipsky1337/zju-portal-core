@@ -47,10 +47,9 @@ var sessionStateTransitions = map[SessionState]map[SessionState]struct{}{
 		SessionStateStopping:           {},
 	},
 	SessionStateEstablishingTunnel: {
-		SessionStateReady:        {},
-		SessionStateReconnecting: {},
-		SessionStateFailed:       {},
-		SessionStateStopping:     {},
+		SessionStateReady:    {},
+		SessionStateFailed:   {},
+		SessionStateStopping: {},
 	},
 	SessionStateReady: {
 		SessionStateReconnecting: {},
@@ -58,10 +57,9 @@ var sessionStateTransitions = map[SessionState]map[SessionState]struct{}{
 		SessionStateStopping:     {},
 	},
 	SessionStateReconnecting: {
-		SessionStateEstablishingTunnel: {},
-		SessionStateReady:              {},
-		SessionStateFailed:             {},
-		SessionStateStopping:           {},
+		SessionStateReady:    {},
+		SessionStateFailed:   {},
+		SessionStateStopping: {},
 	},
 	SessionStateFailed: {
 		SessionStateStopping: {},

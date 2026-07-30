@@ -103,7 +103,6 @@ func (response AuthResponse) Validate(challenge AuthChallenge) error {
 		if !challenge.AllowSkip {
 			return invalidAuthResponse("authentication challenge cannot be skipped")
 		}
-		return nil
 	}
 
 	if challenge.Kind == AuthChallengeSelectAuthenticationMethod {

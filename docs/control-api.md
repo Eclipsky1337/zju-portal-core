@@ -510,12 +510,15 @@ Content-Type: application/json
 ```json
 {
   "challenge_id": "challenge-id",
+  "value": "654321",
   "skip": true
 }
 ```
 
-只有 `allow_skip: true` 的 challenge 可以跳过。每个 challenge 只能完成一次；ID 不存在或
-已经完成时返回 `AUTH_CHALLENGE_NOT_FOUND`。
+只有 `allow_skip: true` 的 challenge 可以设置 `skip: true`。当前该字段用于
+`secondary_sms`：验证码仍必须通过 `value` 提交，`skip` 仅请求服务端跳过后续二次认证，
+不能跳过当前 challenge。每个 challenge 只能完成一次；ID 不存在或已经完成时返回
+`AUTH_CHALLENGE_NOT_FOUND`。
 
 SSE 新订阅者会收到仍未完成的认证 challenge，因此 UI 重连后不需要要求 Core 重新发起
 认证。

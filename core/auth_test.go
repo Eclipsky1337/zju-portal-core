@@ -69,7 +69,7 @@ func TestAuthResponseValidate(t *testing.T) {
 	}
 
 	secondarySMS := AuthChallenge{ID: "sms-1", Kind: AuthChallengeSecondarySMS, AllowSkip: true}
-	if err := (AuthResponse{ChallengeID: "sms-1", Skip: true}).Validate(secondarySMS); err != nil {
+	if err := (AuthResponse{ChallengeID: "sms-1", Value: "654321", Skip: true}).Validate(secondarySMS); err != nil {
 		t.Fatalf("skip response error = %v", err)
 	}
 
@@ -99,6 +99,10 @@ func TestAuthResponseRejectsInvalidInput(t *testing.T) {
 		{
 			challenge: AuthChallenge{ID: "password-1", Kind: AuthChallengePassword},
 			response:  AuthResponse{ChallengeID: "password-1", Skip: true},
+		},
+		{
+			challenge: AuthChallenge{ID: "sms-1", Kind: AuthChallengeSecondarySMS, AllowSkip: true},
+			response:  AuthResponse{ChallengeID: "sms-1", Skip: true},
 		},
 		{
 			challenge: AuthChallenge{ID: "method-1", Kind: AuthChallengeSelectAuthenticationMethod, Choices: []AuthChoice{{ID: "password"}}},

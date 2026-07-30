@@ -20,7 +20,7 @@ func (s *Session) completeCustomSMS(ctx context.Context) (authStep, error) {
 	response, err := s.handleChallenge(ctx, core.AuthChallenge{
 		ID:        s.randSdpId(16),
 		Kind:      core.AuthChallengeSecondarySMS,
-		Prompt:    "Enter SMS verification code (prefix with $ to skip secondary authentication): ",
+		Prompt:    "Enter SMS verification code: ",
 		AllowSkip: true,
 	})
 	if err != nil {

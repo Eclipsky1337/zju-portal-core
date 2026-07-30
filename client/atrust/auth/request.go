@@ -396,7 +396,7 @@ func (s *Session) smsCheckCode(ctx context.Context, step authStep) (authStep, er
 	response, err := s.handleChallenge(ctx, core.AuthChallenge{
 		ID:        s.randSdpId(16),
 		Kind:      core.AuthChallengeSecondarySMS,
-		Prompt:    "Enter SMS verification code (prefix with $ to skip secondary authentication): ",
+		Prompt:    "Enter SMS verification code: ",
 		AllowSkip: true,
 	})
 	if err != nil {

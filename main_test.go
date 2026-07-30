@@ -10,7 +10,6 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -204,7 +203,7 @@ func restToken(output string) string {
 
 func TestDaemonConfigValidationMode(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
-	if err := os.WriteFile(path, []byte("version: 1\nsession:\n  auto-start: false\n"), 0600); err != nil {
+	if err := os.WriteFile(path, []byte("version: 1\nsession:\n  auto-start: false\n"), 0666); err != nil {
 		t.Fatal(err)
 	}
 	var output bytes.Buffer
@@ -243,22 +242,15 @@ func TestControlCapabilitiesDescribeImplementedAPIs(t *testing.T) {
 	}
 }
 
-func TestSaveResumeStateAtomicallyUsesReadablePermissions(t *testing.T) {
+func TestSaveResumeStateAtomically(t *testing.T) {
 	directory := t.TempDir()
 	path := filepath.Join(directory, "resume.json")
-	if err := os.WriteFile(path, []byte("old"), 0644); err != nil {
+	if err := os.WriteFile(path, []byte("old"), 0666); err != nil {
 		t.Fatal(err)
 	}
 	want := core.ResumeState{Format: core.ResumeStateFormatATrustClientData, Version: core.ResumeStateVersion1, Revision: 3, Data: "state"}
 	if err := saveResumeState(path, want); err != nil {
 		t.Fatal(err)
-	}
-	info, err := os.Stat(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if permissions := info.Mode().Perm(); runtime.GOOS != "windows" && permissions != 0644 {
-		t.Fatalf("resume state permissions = %o", permissions)
 	}
 	got, err := loadResumeState(path)
 	if err != nil {

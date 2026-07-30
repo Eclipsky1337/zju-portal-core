@@ -14,7 +14,7 @@ import (
 	"github.com/Eclipsky1337/zju-portal-core/core"
 )
 
-func writePrivateFile(path string, data []byte, _ os.FileMode) error {
+func writeFileAtomically(path string, data []byte) error {
 	directory := filepath.Dir(path)
 	temporary, err := os.CreateTemp(directory, "."+filepath.Base(path)+"-*")
 	if err != nil {
@@ -23,10 +23,6 @@ func writePrivateFile(path string, data []byte, _ os.FileMode) error {
 	temporaryPath := temporary.Name()
 	defer os.Remove(temporaryPath)
 
-	if err := temporary.Chmod(0600); err != nil {
-		_ = temporary.Close()
-		return err
-	}
 	if _, err := temporary.Write(data); err != nil {
 		_ = temporary.Close()
 		return err
@@ -41,7 +37,7 @@ func writePrivateFile(path string, data []byte, _ os.FileMode) error {
 	if err := os.Rename(temporaryPath, path); err != nil {
 		return err
 	}
-	return os.Chmod(path, 0600)
+	return nil
 }
 
 func decodeResumeState(config Config, state core.ResumeState) ([]byte, uint64, error) {

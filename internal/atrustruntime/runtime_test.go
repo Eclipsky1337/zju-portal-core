@@ -9,7 +9,6 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	goruntime "runtime"
 	"strings"
 	"syscall"
 	"testing"
@@ -73,10 +72,10 @@ func TestStartLoadsResourceAndPersistsClientData(t *testing.T) {
 	resourceData := []byte(`{"resource":true}`)
 	initialClientData := []byte(`{"cookies":[]}`)
 	updatedClientData := []byte(`{"cookies":[{"name":"sid"}]}`)
-	if err := os.WriteFile(resourcePath, resourceData, 0600); err != nil {
+	if err := os.WriteFile(resourcePath, resourceData, 0666); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(clientDataPath, initialClientData, 0644); err != nil {
+	if err := os.WriteFile(clientDataPath, initialClientData, 0666); err != nil {
 		t.Fatal(err)
 	}
 
@@ -120,13 +119,6 @@ func TestStartLoadsResourceAndPersistsClientData(t *testing.T) {
 	if !bytes.Equal(gotClientData, updatedClientData) {
 		t.Fatalf("persisted client data = %s", gotClientData)
 	}
-	info, err := os.Stat(clientDataPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if goruntime.GOOS != "windows" && info.Mode().Perm() != 0600 {
-		t.Fatalf("client data mode = %o", info.Mode().Perm())
-	}
 }
 
 func TestStartCreatesMissingClientDataFile(t *testing.T) {
@@ -137,7 +129,7 @@ func TestStartCreatesMissingClientDataFile(t *testing.T) {
 		if clientData != nil {
 			t.Fatalf("setup client data = %s, want nil", clientData)
 		}
-		if err := os.MkdirAll(filepath.Dir(clientDataPath), 0755); err != nil {
+		if err := os.MkdirAll(filepath.Dir(clientDataPath), 0777); err != nil {
 			t.Fatal(err)
 		}
 		return []byte(`{"device_id":"new-device"}`), nil
@@ -203,7 +195,7 @@ func TestStartClassifiesClientDataWriteError(t *testing.T) {
 	deps.setup = func(context.Context, *atrustclient.Client, Config, []byte, []byte, func(atrustclient.SetupStage)) ([]byte, error) {
 		return []byte(`{}`), nil
 	}
-	deps.writeFile = func(string, []byte, os.FileMode) error {
+	deps.writeFile = func(string, []byte) error {
 		return wantErr
 	}
 

@@ -177,10 +177,10 @@ func (controller *darwinController) acquireLock() error {
 	if controller.lockPath == "" {
 		controller.lockPath = defaultLockPath
 	}
-	if err := os.MkdirAll(filepath.Dir(controller.lockPath), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(controller.lockPath), 0o777); err != nil {
 		return fmt.Errorf("create system DNS state directory: %w", err)
 	}
-	lockFile, err := os.OpenFile(controller.lockPath, os.O_CREATE|os.O_RDWR, 0o644)
+	lockFile, err := os.OpenFile(controller.lockPath, os.O_CREATE|os.O_RDWR, 0o666)
 	if err != nil {
 		return fmt.Errorf("open system DNS lock: %w", err)
 	}
@@ -227,7 +227,7 @@ func (controller *darwinController) writeSnapshot(snapshots []dnsSnapshot) error
 	if err != nil {
 		return fmt.Errorf("encode system DNS snapshot: %w", err)
 	}
-	if err := os.MkdirAll(filepath.Dir(controller.statePath), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(controller.statePath), 0o777); err != nil {
 		return fmt.Errorf("create system DNS state directory: %w", err)
 	}
 	temporary, err := os.CreateTemp(filepath.Dir(controller.statePath), ".system-dns-*")
@@ -236,10 +236,6 @@ func (controller *darwinController) writeSnapshot(snapshots []dnsSnapshot) error
 	}
 	temporaryName := temporary.Name()
 	defer os.Remove(temporaryName)
-	if err := temporary.Chmod(0o644); err != nil {
-		_ = temporary.Close()
-		return err
-	}
 	if _, err := temporary.Write(data); err != nil {
 		_ = temporary.Close()
 		return fmt.Errorf("write system DNS snapshot: %w", err)

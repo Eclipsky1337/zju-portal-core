@@ -92,7 +92,7 @@ func TestDarwinControllerRecoversStaleSnapshot(t *testing.T) {
 		"-setdnsservers\x00Wi-Fi\x00172.19.0.2": "",
 	}}
 	controller := testDarwinController(t, runner)
-	if err := os.WriteFile(controller.statePath, []byte(`[{"service":"Wi-Fi","servers":["9.9.9.9"]}]`), 0o644); err != nil {
+	if err := os.WriteFile(controller.statePath, []byte(`[{"service":"Wi-Fi","servers":["9.9.9.9"]}]`), 0o666); err != nil {
 		t.Fatal(err)
 	}
 	if err := controller.Apply(context.Background(), "172.19.0.2"); err != nil {

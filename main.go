@@ -202,7 +202,7 @@ func configureLog(config daemonconfig.LogConfig, fallback io.Writer) (io.Closer,
 	writer := fallback
 	var closer io.Closer
 	if config.Output != "" && config.Output != "stderr" {
-		file, err := os.OpenFile(config.Output, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
+		file, err := os.OpenFile(config.Output, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0666)
 		if err != nil {
 			return nil, fmt.Errorf("open log output: %w", err)
 		}
@@ -279,7 +279,7 @@ func saveResumeState(path string, state core.ResumeState) error {
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0777); err != nil {
 		return err
 	}
 	temporary, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".tmp-*")
@@ -294,9 +294,6 @@ func saveResumeState(path string, state core.ResumeState) error {
 			_ = os.Remove(temporaryPath)
 		}
 	}()
-	if err := temporary.Chmod(0644); err != nil {
-		return err
-	}
 	if _, err := temporary.Write(data); err != nil {
 		return err
 	}

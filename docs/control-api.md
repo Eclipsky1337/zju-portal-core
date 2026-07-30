@@ -24,8 +24,7 @@ control:
     secret-file: /path/to/rest.token
 ```
 
-REST 只允许监听回环地址。建议使用权限为 `0600` 的 `secret-file`，不要把 Token 直接写入
-命令历史、日志、提交或 issue。
+REST 只允许监听回环地址。不要把 Token 直接写入命令历史、日志、提交或 issue。
 
 也可以临时通过命令行启用：
 
@@ -702,7 +701,7 @@ GET /api/v1/sessions/{id}/resume-state
 - 本次状态是否成功复用的 `reused`。
 
 该接口设置 `Cache-Control: no-store` 和 `Pragma: no-cache`。调用方仍应将 Resume State 按
-认证凭据保护，持久化文件建议权限为 `0600`。
+认证凭据保护，避免泄露持久化内容。
 
 当收到以下事件时应重新读取并覆盖本地状态：
 

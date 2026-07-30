@@ -224,7 +224,7 @@ func (r *Runtime) CloseContext(ctx context.Context) error {
 
 type dependencies struct {
 	readFile       func(string) ([]byte, error)
-	writeFile      func(string, []byte, os.FileMode) error
+	writeFile      func(string, []byte) error
 	newClient      func(context.Context, string, string, string, string) *atrustclient.Client
 	closeClient    func(*atrustclient.Client)
 	setAuthHandler func(*atrustclient.Client, core.AuthHandler)
@@ -237,7 +237,7 @@ type dependencies struct {
 func defaultDependencies() dependencies {
 	return dependencies{
 		readFile:  os.ReadFile,
-		writeFile: writePrivateFile,
+		writeFile: writeFileAtomically,
 		newClient: atrustclient.NewClientContext,
 		closeClient: func(client *atrustclient.Client) {
 			client.Close()
@@ -376,7 +376,7 @@ func startWithStageHandler(ctx context.Context, config Config, deps dependencies
 	runtime.resumeState = encodeResumeState(config, atrustClient, clientData, resumeRevision+1)
 
 	if config.ClientDataFile != "" {
-		if err := deps.writeFile(config.ClientDataFile, clientData, 0600); err != nil {
+		if err := deps.writeFile(config.ClientDataFile, clientData); err != nil {
 			runtime.Close()
 			return nil, core.WrapError(
 				core.ErrorCodeClientDataWriteFailed,

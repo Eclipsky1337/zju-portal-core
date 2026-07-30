@@ -432,7 +432,12 @@ func (c *l3TunnelConn) ensureAuth(ct *conntrack, meta packetMeta) error {
 	case <-ct.authCh:
 		return ct.authErr
 	case <-time.After(8 * time.Second):
-		return fmt.Errorf("%w for %s", errL3TunnelAuthTimeout, ct.key)
+		err := fmt.Errorf("%w for %s", errL3TunnelAuthTimeout, ct.key)
+		if c.conntrackMgr.timeoutAuth(ct, err) {
+			return err
+		}
+		<-ct.authCh
+		return ct.authErr
 	}
 }
 

@@ -1,6 +1,7 @@
 package atrust
 
 import (
+	"errors"
 	"testing"
 	"time"
 )
@@ -45,5 +46,44 @@ func TestConntrackManagerDoesNotEvictPendingAuthentication(t *testing.T) {
 	manager.getOrCreate("flow-new", "app", "group")
 	if manager.byKey["flow-pending"] != pending {
 		t.Fatal("pending authentication was evicted")
+	}
+}
+
+func TestConntrackManagerTimeoutRemovesPendingAuthentication(t *testing.T) {
+	manager := newConntrackMgr()
+	pending := manager.getOrCreate("flow-pending", "app", "group")
+	timeoutErr := errors.New("authentication timeout")
+
+	if !manager.timeoutAuth(pending, timeoutErr) {
+		t.Fatal("pending authentication was not terminated")
+	}
+	select {
+	case <-pending.authCh:
+	default:
+		t.Fatal("pending authentication waiters were not released")
+	}
+	if !errors.Is(pending.authErr, timeoutErr) {
+		t.Fatalf("authentication error = %v", pending.authErr)
+	}
+	if manager.byKey[pending.key] != nil || manager.byID[pending.authID] != nil {
+		t.Fatal("timed out authentication remained indexed")
+	}
+
+	replacement := manager.getOrCreate("flow-pending", "app", "group")
+	if replacement == pending || replacement.authID == pending.authID {
+		t.Fatal("timed out flow did not create a new authentication attempt")
+	}
+}
+
+func TestConntrackManagerTimeoutDoesNotOverrideCompletedAuthentication(t *testing.T) {
+	manager := newConntrackMgr()
+	completed := manager.getOrCreate("flow-completed", "app", "group")
+	manager.markAuth(completed.authID, "token", nil)
+
+	if manager.timeoutAuth(completed, errors.New("authentication timeout")) {
+		t.Fatal("completed authentication was overwritten by timeout")
+	}
+	if completed.authErr != nil || completed.connectToken != "token" {
+		t.Fatalf("completed authentication changed: token=%q err=%v", completed.connectToken, completed.authErr)
 	}
 }

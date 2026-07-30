@@ -82,6 +82,22 @@ func (m *conntrackMgr) markAuth(authID uint64, token string, err error) {
 	close(ct.authCh)
 }
 
+func (m *conntrackMgr) timeoutAuth(ct *conntrack, err error) bool {
+	m.mu.Lock()
+	if m.byID[ct.authID] != ct {
+		m.mu.Unlock()
+		return false
+	}
+	delete(m.byID, ct.authID)
+	if m.byKey[ct.key] == ct {
+		delete(m.byKey, ct.key)
+	}
+	ct.authErr = err
+	m.mu.Unlock()
+	close(ct.authCh)
+	return true
+}
+
 func (m *conntrackMgr) cleanup(now time.Time) {
 	cutoff := now.Add(-m.idleAfter).UnixNano()
 	for key, ct := range m.byKey {

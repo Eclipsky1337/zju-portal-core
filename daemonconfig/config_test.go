@@ -47,6 +47,9 @@ inbounds:
 	if config.ATrust.Port != 443 || config.ATrust.AuthType != "auth/psw" || config.DNS.CacheTTL != Duration(time.Hour) {
 		t.Fatalf("defaults not applied: %#v", config)
 	}
+	if config.Inbounds.TUN.UDP.MaxFlows != 512 {
+		t.Fatalf("default TUN UDP max flows = %d", config.Inbounds.TUN.UDP.MaxFlows)
+	}
 	mapped := config.CoreConfig()
 	if mapped.ServerAddress != "vpn.example.edu" || mapped.InternetOutbound.Type != core.InternetOutboundSOCKS5 || mapped.SOCKSBind != "127.0.0.1:1080" || !mapped.TUNEnabled || !mapped.TUNRouteAll || !mapped.TUNFakeIP {
 		t.Fatalf("core config = %#v", mapped)

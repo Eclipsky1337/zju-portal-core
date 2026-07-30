@@ -25,7 +25,7 @@ const (
 	defaultTUNMTU         uint32 = 1400
 	defaultTUNStack              = "auto"
 	defaultTUNUDPTimeout         = 60 * time.Second
-	defaultTUNUDPMaxFlows        = 4096
+	defaultTUNUDPMaxFlows        = 512
 	tunCleanupTimeout            = 5 * time.Second
 )
 

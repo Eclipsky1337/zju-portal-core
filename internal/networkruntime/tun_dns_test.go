@@ -204,7 +204,12 @@ func TestTUNFakeIPConnectionTrackingUsesDomain(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for TUN dial")
 	}
+	deadline := time.Now().Add(time.Second)
 	connections := tracker.Connections()
+	for len(connections) == 0 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+		connections = tracker.Connections()
+	}
 	if len(connections) != 1 || connections[0].Destination != "app.example.edu:443" {
 		t.Fatalf("connections = %#v", connections)
 	}

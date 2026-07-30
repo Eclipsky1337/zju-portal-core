@@ -106,6 +106,8 @@ type managerStub struct {
 	startOnce     sync.Once
 	challengeSent chan struct{}
 	challengeOnce sync.Once
+	resourcesRead chan struct{}
+	resourcesOnce sync.Once
 
 	mu          sync.Mutex
 	response    core.AuthResponse
@@ -124,6 +126,7 @@ func newManagerStub() *managerStub {
 		responses:     make(chan core.AuthResponse, 1),
 		startDone:     make(chan struct{}),
 		challengeSent: make(chan struct{}),
+		resourcesRead: make(chan struct{}),
 		statuses:      make(map[core.SessionID]core.SessionStatus),
 		resources:     make(map[core.SessionID]core.Resources),
 		services:      make(map[core.SessionID][]core.ServiceStatus),
@@ -195,6 +198,7 @@ func (manager *managerStub) Resources(id core.SessionID) (core.Resources, error)
 	manager.mu.Lock()
 	defer manager.mu.Unlock()
 	resources, ok := manager.resources[id]
+	manager.resourcesOnce.Do(func() { close(manager.resourcesRead) })
 	if !ok {
 		return core.Resources{}, core.WrapError(core.ErrorCodeSessionNotFound, "session not found", false, nil)
 	}
@@ -320,6 +324,7 @@ func TestServerFullControlFlow(t *testing.T) {
 	<-manager.startDone
 	_, _ = io.WriteString(writer, "{\"id\":4,\"method\":\"session.status\",\"params\":{\"session_id\":\"session-1\"}}\n")
 	_, _ = io.WriteString(writer, "{\"id\":5,\"method\":\"resources.get\",\"params\":{\"session_id\":\"session-1\"}}\n")
+	<-manager.resourcesRead
 	_, _ = io.WriteString(writer, "{\"id\":6,\"method\":\"services.get\",\"params\":{\"session_id\":\"session-1\"}}\n")
 	_, _ = io.WriteString(writer, "{\"id\":7,\"method\":\"resources.refresh\",\"params\":{\"session_id\":\"session-1\"}}\n")
 	_, _ = io.WriteString(writer, "{\"id\":8,\"method\":\"session.stop\",\"params\":{\"session_id\":\"session-1\"}}\n")

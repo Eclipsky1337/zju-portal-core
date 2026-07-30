@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -256,7 +257,7 @@ func TestSaveResumeStateAtomicallyUsesReadablePermissions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if permissions := info.Mode().Perm(); permissions != 0644 {
+	if permissions := info.Mode().Perm(); runtime.GOOS != "windows" && permissions != 0644 {
 		t.Fatalf("resume state permissions = %o", permissions)
 	}
 	got, err := loadResumeState(path)

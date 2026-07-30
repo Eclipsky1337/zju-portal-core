@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"syscall"
 	"time"
@@ -309,6 +310,9 @@ func saveResumeState(path string, state core.ResumeState) error {
 		return err
 	}
 	removeTemporary = false
+	if runtime.GOOS == "windows" {
+		return nil
+	}
 	directory, err := os.Open(filepath.Dir(path))
 	if err != nil {
 		return err

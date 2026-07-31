@@ -41,6 +41,10 @@ jobs:
       - name: Run tests
         run: go test ./...
 
+      - name: Build macOS gVisor variant
+        if: runner.os == 'macOS'
+        run: go build -tags with_gvisor -trimpath ./...
+
   quality:
     name: Static analysis and race detection
     runs-on: ubuntu-latest

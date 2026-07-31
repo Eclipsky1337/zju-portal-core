@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -253,6 +254,11 @@ func TestSaveResumeStateAtomically(t *testing.T) {
 	if err := os.WriteFile(path, []byte("old"), 0666); err != nil {
 		t.Fatal(err)
 	}
+	if runtime.GOOS != "windows" {
+		if err := os.Chmod(path, 0640); err != nil {
+			t.Fatal(err)
+		}
+	}
 	want := core.ResumeState{Format: core.ResumeStateFormatATrustClientData, Version: core.ResumeStateVersion1, Revision: 3, Data: "state"}
 	if err := saveResumeState(path, want); err != nil {
 		t.Fatal(err)
@@ -263,6 +269,15 @@ func TestSaveResumeStateAtomically(t *testing.T) {
 	}
 	if !reflect.DeepEqual(*got, want) {
 		t.Fatalf("resume state = %#v, want %#v", *got, want)
+	}
+	if runtime.GOOS != "windows" {
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if gotMode := info.Mode().Perm(); gotMode != 0640 {
+			t.Fatalf("resume state mode = %o, want 640", gotMode)
+		}
 	}
 	temporary, err := filepath.Glob(filepath.Join(directory, ".resume.json.tmp-*"))
 	if err != nil || len(temporary) != 0 {

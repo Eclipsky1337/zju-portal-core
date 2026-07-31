@@ -280,6 +280,10 @@ func saveResumeState(path string, state core.ResumeState) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0777); err != nil {
 		return err
 	}
+	metadata, err := inspectResumeStateFile(path)
+	if err != nil {
+		return err
+	}
 	temporary, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".tmp-*")
 	if err != nil {
 		return err
@@ -293,6 +297,9 @@ func saveResumeState(path string, state core.ResumeState) error {
 		}
 	}()
 	if _, err := temporary.Write(data); err != nil {
+		return err
+	}
+	if err := applyResumeStateFileMetadata(temporary, metadata); err != nil {
 		return err
 	}
 	if err := temporary.Sync(); err != nil {

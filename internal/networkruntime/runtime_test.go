@@ -242,6 +242,9 @@ func TestSelectiveTUNKeepsRuleRouterForInternetFallback(t *testing.T) {
 			if !routePrefixesContain(config.RouteAddresses, netip.MustParseAddr("198.18.0.1")) {
 				t.Fatalf("selective routes %v do not contain fake IP range", config.RouteAddresses)
 			}
+			if routePrefixesContain(config.RouteAddresses, netip.MustParseAddr("10.1.2.3")) {
+				t.Fatalf("selective routes %v unexpectedly contain unlisted private address", config.RouteAddresses)
+			}
 			tunOutbound = outbound
 			return service, nil
 		},
@@ -262,14 +265,14 @@ func TestSelectiveTUNKeepsRuleRouterForInternetFallback(t *testing.T) {
 
 	conn, err = tunOutbound.DialContext(context.Background(), "tcp", "10.1.2.3:443")
 	if err != nil {
-		t.Fatalf("built-in ZJU route: %v", err)
+		t.Fatalf("unlisted private address fallback: %v", err)
 	}
-	if route := core.RouteInfoOf(conn); route.Outbound != dial.OutboundATrust {
-		t.Fatalf("built-in ZJU route info = %#v", route)
+	if route := core.RouteInfoOf(conn); route.Outbound != dial.OutboundInternet {
+		t.Fatalf("unlisted private address route info = %#v", route)
 	}
 	_ = conn.Close()
-	if got := internet.dialCount.Load(); got != 1 {
-		t.Fatalf("internet dial count = %d, want 1", got)
+	if got := internet.dialCount.Load(); got != 2 {
+		t.Fatalf("internet dial count = %d, want 2", got)
 	}
 }
 

@@ -9,12 +9,8 @@ import (
 	"inet.af/netaddr"
 )
 
-var builtinZJURoute = netip.MustParsePrefix("10.0.0.0/8")
-
 func buildResourceRoutePrefixes(ipResources []client.IPResource, dnsRecords map[string]net.IP, excludedIPs []net.IP, fakeIPRange string) ([]netip.Prefix, error) {
 	var builder netaddr.IPSetBuilder
-	builtin, _ := netaddr.ParseIPPrefix(builtinZJURoute.String())
-	builder.AddPrefix(builtin)
 
 	for _, resource := range ipResources {
 		first, firstOK := netaddr.FromStdIP(resource.IPMin)
@@ -57,15 +53,8 @@ func buildResourceRoutePrefixes(ipResources []client.IPResource, dnsRecords map[
 	return routes, nil
 }
 
-func addImplicitRouteResources(resources []client.IPResource, dnsRecords map[string]net.IP) []client.IPResource {
+func addStaticDNSResources(resources []client.IPResource, dnsRecords map[string]net.IP) []client.IPResource {
 	result := append([]client.IPResource(nil), resources...)
-	result = append(result, client.IPResource{
-		IPMin:    net.IPv4(10, 0, 0, 0),
-		IPMax:    net.IPv4(10, 255, 255, 255),
-		PortMin:  0,
-		PortMax:  65535,
-		Protocol: "all",
-	})
 	for _, address := range dnsRecords {
 		if ipv4 := address.To4(); ipv4 != nil {
 			result = append(result, client.IPResource{

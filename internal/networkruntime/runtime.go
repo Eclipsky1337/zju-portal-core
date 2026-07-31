@@ -200,7 +200,7 @@ func newVPNBackend(ctx context.Context, vpnClient client.Client, config Config) 
 		if err != nil {
 			return nil, err
 		}
-		ipResources = addImplicitRouteResources(ipResources, dnsRecords)
+		ipResources = addStaticDNSResources(ipResources, dnsRecords)
 	}
 
 	var vpnStack stackpkg.Stack

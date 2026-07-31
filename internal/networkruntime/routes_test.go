@@ -9,7 +9,7 @@ import (
 	"github.com/Eclipsky1337/zju-portal-core/client"
 )
 
-func TestBuildResourceRoutePrefixesMergesResourcesDNSAndBuiltinRoutes(t *testing.T) {
+func TestBuildResourceRoutePrefixesMergesResourcesDNSAndFakeIPRoutes(t *testing.T) {
 	routes, err := buildResourceRoutePrefixes([]client.IPResource{
 		{IPMin: net.ParseIP("192.0.2.8"), IPMax: net.ParseIP("192.0.2.8")},
 		{IPMin: net.ParseIP("172.16.0.0"), IPMax: net.ParseIP("172.16.255.255")},
@@ -22,13 +22,15 @@ func TestBuildResourceRoutePrefixesMergesResourcesDNSAndBuiltinRoutes(t *testing
 		t.Fatal(err)
 	}
 
-	for _, address := range []string{"10.13.1.1", "192.0.2.8", "172.16.100.1", "198.51.100.1", "198.51.100.6", "203.0.113.9", "198.18.1.1"} {
+	for _, address := range []string{"192.0.2.8", "172.16.100.1", "198.51.100.1", "198.51.100.6", "203.0.113.9", "198.18.1.1"} {
 		if !routePrefixesContain(routes, netip.MustParseAddr(address)) {
 			t.Fatalf("routes %v do not contain %s", routes, address)
 		}
 	}
-	if routePrefixesContain(routes, netip.MustParseAddr("8.8.8.8")) {
-		t.Fatalf("routes %v unexpectedly contain public internet traffic", routes)
+	for _, address := range []string{"10.13.1.1", "8.8.8.8"} {
+		if routePrefixesContain(routes, netip.MustParseAddr(address)) {
+			t.Fatalf("routes %v unexpectedly contain unlisted address %s", routes, address)
+		}
 	}
 }
 
@@ -41,28 +43,24 @@ func TestBuildResourceRoutePrefixesRejectsInvalidFakeIPRange(t *testing.T) {
 func TestBuildResourceRoutePrefixesExcludesTunnelNodes(t *testing.T) {
 	routes, err := buildResourceRoutePrefixes([]client.IPResource{
 		{IPMin: net.ParseIP("192.0.2.0"), IPMax: net.ParseIP("192.0.2.255")},
-	}, nil, []net.IP{net.ParseIP("10.0.0.10"), net.ParseIP("192.0.2.10")}, "")
+	}, nil, []net.IP{net.ParseIP("192.0.2.10")}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	for _, address := range []string{"10.0.0.10", "192.0.2.10"} {
-		if routePrefixesContain(routes, netip.MustParseAddr(address)) {
-			t.Fatalf("routes %v contain excluded tunnel node %s", routes, address)
-		}
+	if routePrefixesContain(routes, netip.MustParseAddr("192.0.2.10")) {
+		t.Fatalf("routes %v contain excluded tunnel node", routes)
 	}
-	for _, address := range []string{"10.0.0.11", "192.0.2.11"} {
-		if !routePrefixesContain(routes, netip.MustParseAddr(address)) {
-			t.Fatalf("routes %v do not contain adjacent resource %s", routes, address)
-		}
+	if !routePrefixesContain(routes, netip.MustParseAddr("192.0.2.11")) {
+		t.Fatalf("routes %v do not contain adjacent resource", routes)
 	}
 }
 
-func TestAddImplicitRouteResources(t *testing.T) {
-	resources := addImplicitRouteResources(nil, map[string]net.IP{
+func TestAddStaticDNSResources(t *testing.T) {
+	resources := addStaticDNSResources(nil, map[string]net.IP{
 		"static.example.edu": net.ParseIP("203.0.113.9"),
 	})
-	for _, address := range []net.IP{net.ParseIP("10.1.2.3"), net.ParseIP("203.0.113.9")} {
+	for _, address := range []net.IP{net.ParseIP("203.0.113.9")} {
 		matched := false
 		for _, resource := range resources {
 			if bytes.Compare(address.To4(), resource.IPMin.To4()) >= 0 && bytes.Compare(address.To4(), resource.IPMax.To4()) <= 0 {
@@ -72,6 +70,12 @@ func TestAddImplicitRouteResources(t *testing.T) {
 		}
 		if !matched {
 			t.Fatalf("implicit resources %#v do not contain %s", resources, address)
+		}
+	}
+	for _, resource := range resources {
+		address := net.ParseIP("10.1.2.3").To4()
+		if bytes.Compare(address, resource.IPMin.To4()) >= 0 && bytes.Compare(address, resource.IPMax.To4()) <= 0 {
+			t.Fatalf("static DNS resources %#v unexpectedly contain 10.1.2.3", resources)
 		}
 	}
 }

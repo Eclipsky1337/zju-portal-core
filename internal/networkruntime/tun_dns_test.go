@@ -152,6 +152,48 @@ func TestTUNFakeIPOnlyAppliesToVPNDomains(t *testing.T) {
 	}
 }
 
+func TestTUNFakeIPExcludesControlServerDomain(t *testing.T) {
+	resolver := &tunResolverStub{
+		vpnDomains: map[string]bool{
+			"vpn.example.edu":       true,
+			"app.vpn.example.edu":   true,
+			"other.vpn.example.edu": true,
+		},
+		ips: map[string]net.IP{
+			"vpn.example.edu": net.ParseIP("192.0.2.15"),
+		},
+	}
+	created, err := newTUNService(TUNConfig{
+		FakeIP:            true,
+		AutoRoute:         true,
+		Resolver:          resolver,
+		ControlServerHost: " VPN.Example.EDU. ",
+	}, &outboundStub{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := created.(*tunService)
+
+	controlAddress := queryTUNARecord(t, service, "vpn.example.edu.")
+	if !controlAddress.Equal(net.ParseIP("192.0.2.15")) {
+		t.Fatalf("control server DNS address = %s", controlAddress)
+	}
+	if resolver.host != "vpn.example.edu" {
+		t.Fatalf("resolved control server host = %q", resolver.host)
+	}
+
+	for _, domain := range []string{"app.vpn.example.edu.", "other.vpn.example.edu."} {
+		address := queryTUNARecord(t, service, domain)
+		fakeIP, ok := netip.AddrFromSlice(address)
+		if !ok {
+			t.Fatalf("%s fake IP = %v", domain, address)
+		}
+		if resolvedDomain, found := service.fakeIPs.Lookup(fakeIP.Unmap()); !found || resolvedDomain != normalizeDomain(domain) {
+			t.Fatalf("%s fake IP lookup = %q, %v", domain, resolvedDomain, found)
+		}
+	}
+}
+
 func queryTUNARecord(t *testing.T, service *tunService, domain string) net.IP {
 	t.Helper()
 	query := new(dns.Msg)

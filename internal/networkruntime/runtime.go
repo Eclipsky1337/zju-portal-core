@@ -46,6 +46,7 @@ type Config struct {
 	TUNDNSHijack         bool
 	TUNFakeIP            bool
 	TUNFakeIPRange       string
+	ControlServerHost    string
 	TUNRouteAddresses    []netip.Prefix
 	RoutingMode          core.RoutingMode
 	InternetOutbound     core.InternetOutboundConfig

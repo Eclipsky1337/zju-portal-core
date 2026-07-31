@@ -69,6 +69,7 @@ func defaultInboundFactories() []InboundFactory {
 					DNSHijack:         config.TUNDNSHijack,
 					FakeIP:            config.TUNFakeIP,
 					FakeIPRange:       config.TUNFakeIPRange,
+					ControlServerHost: config.ControlServerHost,
 					RouteAddresses:    config.TUNRouteAddresses,
 					Resolver:          dependencies.Resolver,
 					OutboundInterface: config.TUNOutboundInterface,

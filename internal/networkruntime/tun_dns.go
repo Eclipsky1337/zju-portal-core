@@ -25,10 +25,11 @@ type tunVPNDomainMatcher interface {
 }
 
 type tunFakeIPResolver struct {
-	resolver tunResolver
-	matcher  tunVPNDomainMatcher
-	routes   []netip.Prefix
-	fakeIPs  *fakeIPStore
+	resolver          tunResolver
+	matcher           tunVPNDomainMatcher
+	controlServerHost string
+	routes            []netip.Prefix
+	fakeIPs           *fakeIPStore
 }
 
 func (service *tunService) routeDestination(destination M.Socksaddr) string {
@@ -93,9 +94,10 @@ func (service *tunService) handleDNSPayload(ctx context.Context, payload []byte)
 			handler.FakeIPv4 = service.fakeIPs.Assign
 		} else {
 			resolver := &tunFakeIPResolver{
-				resolver: service.config.Resolver,
-				routes:   service.config.RouteAddresses,
-				fakeIPs:  service.fakeIPs,
+				resolver:          service.config.Resolver,
+				controlServerHost: normalizeDomain(service.config.ControlServerHost),
+				routes:            service.config.RouteAddresses,
+				fakeIPs:           service.fakeIPs,
 			}
 			resolver.matcher, _ = service.config.Resolver.(tunVPNDomainMatcher)
 			handler.Resolver = resolver
@@ -105,6 +107,9 @@ func (service *tunService) handleDNSPayload(ctx context.Context, payload []byte)
 }
 
 func (resolver *tunFakeIPResolver) Resolve(ctx context.Context, host string) (context.Context, net.IP, error) {
+	if resolver.controlServerHost != "" && normalizeDomain(host) == resolver.controlServerHost {
+		return resolver.resolver.Resolve(ctx, host)
+	}
 	if resolver.matcher != nil && resolver.matcher.IsVPNDomain(host) {
 		return resolver.assign(ctx, host)
 	}

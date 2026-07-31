@@ -182,6 +182,7 @@ func TestRuntimeStartsAndClosesConfiguredProxyServices(t *testing.T) {
 		TUNUDPTimeoutSeconds: 45,
 		TUNUDPMaxFlows:       512,
 		TUNDNSHijack:         true,
+		ControlServerHost:    "vpn.example.edu",
 		SOCKSBind:            socks.address.String(),
 		HTTPBind:             http.address.String(),
 		newTUNService: func(config TUNConfig, _ core.Outbound, _ core.ConnectionObserver) (managedService, error) {
@@ -203,7 +204,7 @@ func TestRuntimeStartsAndClosesConfiguredProxyServices(t *testing.T) {
 			t.Fatalf("service status = %#v", status)
 		}
 	}
-	if tunConfig.UDPTimeout != 45*time.Second || tunConfig.UDPMaxFlows != 512 || !tunConfig.DNSHijack || tunConfig.Resolver == nil {
+	if tunConfig.UDPTimeout != 45*time.Second || tunConfig.UDPMaxFlows != 512 || !tunConfig.DNSHijack || tunConfig.Resolver == nil || tunConfig.ControlServerHost != "vpn.example.edu" {
 		t.Fatalf("TUN config = %#v", tunConfig)
 	}
 	matcher, ok := tunConfig.Resolver.(tunVPNDomainMatcher)

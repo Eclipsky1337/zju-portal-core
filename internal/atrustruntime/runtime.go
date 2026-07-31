@@ -291,6 +291,7 @@ func defaultDependencies() dependencies {
 				TUNDNSHijack:         config.TUNDNSHijack,
 				TUNFakeIP:            config.TUNFakeIP,
 				TUNFakeIPRange:       config.TUNFakeIPRange,
+				ControlServerHost:    config.ServerAddress,
 				RoutingMode:          config.RoutingMode,
 				InternetOutbound:     config.InternetOutbound,
 			}

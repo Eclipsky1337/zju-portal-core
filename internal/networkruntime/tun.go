@@ -43,6 +43,7 @@ type TUNConfig struct {
 	DNSHijack         bool
 	FakeIP            bool
 	FakeIPRange       string
+	ControlServerHost string
 	RouteAddresses    []netip.Prefix
 	Resolver          tunResolver
 	OutboundInterface string

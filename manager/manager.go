@@ -337,7 +337,7 @@ func toRuntimeConfig(config core.Config) atrustruntime.Config {
 		if tunOutboundInterface == "" {
 			tunOutboundInterface = config.BindInterface
 		}
-		if config.BindInterface == "" {
+		if config.TUNRouteAll && config.BindInterface == "" {
 			autoDetectInterface = true
 		}
 	}

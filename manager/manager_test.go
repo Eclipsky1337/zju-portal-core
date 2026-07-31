@@ -259,8 +259,13 @@ func TestRuntimeConfigMapping(t *testing.T) {
 
 func TestRuntimeConfigProtectsTUNAutoRouteUnderlays(t *testing.T) {
 	runtimeConfig := toRuntimeConfig(core.Config{TUNEnabled: true, TUNAutoRoute: true})
+	if runtimeConfig.AutoDetectInterface {
+		t.Fatal("selective TUN auto route overrode disabled underlay interface detection")
+	}
+
+	runtimeConfig = toRuntimeConfig(core.Config{TUNEnabled: true, TUNAutoRoute: true, TUNRouteAll: true})
 	if !runtimeConfig.AutoDetectInterface {
-		t.Fatal("TUN auto route did not enable VPN underlay interface detection")
+		t.Fatal("route-all TUN did not enable VPN underlay interface detection")
 	}
 
 	runtimeConfig = toRuntimeConfig(core.Config{TUNEnabled: true, TUNAutoRoute: true, BindInterface: "en0"})

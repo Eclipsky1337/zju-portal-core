@@ -181,6 +181,10 @@ inbounds:
     dns:
       # 是否把系统 DNS 指向 TUN 对端
       # 必须同时开启 auto-route
+      # macOS 会修改物理网络服务 DNS，并在停止时恢复
+      # Windows 会把 DNS 配置到 TUN 适配器，适配器关闭后自动失效
+      # Linux 通过 systemd-resolved 的 resolvectl 配置 TUN 链路 DNS；
+      # 不使用 systemd-resolved 的发行版需要手动把系统 DNS 指向 TUN 对端
       hijack: true
 
       # 是否为 VPN 域名和解析到 VPN 资源的域名分配 Fake IP

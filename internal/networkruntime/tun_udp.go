@@ -86,6 +86,13 @@ func (service *tunService) NewPacketConnection(ctx context.Context, inbound N.Pa
 	}
 }
 
+func (service *tunService) NewPacketConnectionEx(ctx context.Context, inbound N.PacketConn, source, destination M.Socksaddr, onClose N.CloseHandlerFunc) {
+	err := service.NewPacketConnection(ctx, inbound, M.Metadata{Source: source, Destination: destination})
+	if onClose != nil {
+		onClose(err)
+	}
+}
+
 func (association *tunUDPAssociation) flow(ctx context.Context, destination M.Socksaddr) (*tunUDPFlow, error) {
 	key := association.service.routeDestination(destination)
 	association.mu.Lock()

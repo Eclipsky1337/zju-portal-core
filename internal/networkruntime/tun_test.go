@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	tun "github.com/mythologyli/sing-tun"
+	tun "github.com/sagernet/sing-tun"
 )
 
 func TestNewTUNServiceAppliesDefaults(t *testing.T) {
@@ -156,6 +156,56 @@ func TestTUNServicePassesSelectiveRouteAddresses(t *testing.T) {
 	}
 }
 
+func TestTUNServicePassesPlatformDNSOptions(t *testing.T) {
+	for _, testCase := range []struct {
+		name         string
+		dnsHijack    bool
+		wantServers  []netip.Addr
+		wantDisabled bool
+	}{
+		{
+			name:        "enabled",
+			dnsHijack:   true,
+			wantServers: []netip.Addr{netip.MustParseAddr("172.19.0.2")},
+		},
+		{
+			name:         "disabled",
+			wantDisabled: true,
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			config := TUNConfig{AutoRoute: true, DNSHijack: testCase.dnsHijack}
+			if testCase.dnsHijack {
+				config.SystemDNS = &systemDNSStub{}
+			}
+			created, err := newTUNService(config, &outboundStub{}, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			service := created.(*tunService)
+			device := &tunDeviceStub{}
+			stack := &tunStackStub{}
+			var options tun.Options
+			service.newDevice = func(received tun.Options) (tun.Tun, error) {
+				options = received
+				return device, nil
+			}
+			service.newStack = func(string, tun.StackOptions) (tun.Stack, error) { return stack, nil }
+			if err := service.Start(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			defer service.Close(context.Background())
+
+			if !reflect.DeepEqual(options.DNSServers, testCase.wantServers) {
+				t.Fatalf("DNS servers = %v, want %v", options.DNSServers, testCase.wantServers)
+			}
+			if options.EXP_DisableDNSHijack != testCase.wantDisabled {
+				t.Fatalf("DNS hijack disabled = %v, want %v", options.EXP_DisableDNSHijack, testCase.wantDisabled)
+			}
+		})
+	}
+}
+
 func TestTUNServiceAddsDNSPeerToSelectiveRoutes(t *testing.T) {
 	routes := []netip.Prefix{netip.MustParsePrefix("10.0.0.0/8")}
 	controller := &systemDNSStub{}
@@ -244,7 +294,7 @@ func TestTUNServiceRollsBackWhenSystemDNSFails(t *testing.T) {
 }
 
 func TestTUNStackNameUsesBuildDefaultForAuto(t *testing.T) {
-	if got := tunStackName("auto"); got != "" {
+	if got := tunStackName("auto"); got != automaticTUNStackName {
 		t.Fatalf("tunStackName(auto) = %q", got)
 	}
 	if got := tunStackName("system"); got != "system" {
@@ -418,6 +468,8 @@ type tunDeviceStub struct {
 	closed  atomic.Bool
 	readErr error
 }
+
+func (device *tunDeviceStub) Start() error { return nil }
 
 func (device *tunDeviceStub) Read([]byte) (int, error) { return 0, device.readErr }
 

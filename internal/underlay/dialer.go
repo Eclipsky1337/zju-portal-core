@@ -5,12 +5,12 @@ import (
 	"crypto/tls"
 	"fmt"
 	"net"
-	"net/netip"
 	"strings"
 	"sync"
 	"time"
 
-	tun "github.com/mythologyli/sing-tun"
+	tun "github.com/sagernet/sing-tun"
+	"github.com/sagernet/sing/common/control"
 	"github.com/sagernet/sing/common/logger"
 )
 
@@ -235,6 +235,10 @@ func (d *Dialer) refreshInterface(previous string) string {
 var findDefaultInterface = detectDefaultInterface
 
 func detectDefaultInterface() string {
+	interfaceFinder := control.NewDefaultInterfaceFinder()
+	if err := interfaceFinder.Update(); err != nil {
+		return ""
+	}
 	networkMonitor, err := tun.NewNetworkUpdateMonitor(logger.NOP())
 	if err != nil {
 		return ""
@@ -245,7 +249,10 @@ func detectDefaultInterface() string {
 	}
 	defer networkMonitor.Close()
 
-	interfaceMonitor, err := tun.NewDefaultInterfaceMonitor(networkMonitor, logger.NOP(), tun.DefaultInterfaceMonitorOptions{OverrideAndroidVPN: true})
+	interfaceMonitor, err := tun.NewDefaultInterfaceMonitor(networkMonitor, logger.NOP(), tun.DefaultInterfaceMonitorOptions{
+		InterfaceFinder:    interfaceFinder,
+		OverrideAndroidVPN: true,
+	})
 	if err != nil {
 		return ""
 	}
@@ -255,7 +262,11 @@ func detectDefaultInterface() string {
 	}
 	defer interfaceMonitor.Close()
 
-	return interfaceMonitor.DefaultInterfaceName(netip.IPv4Unspecified())
+	defaultInterface := interfaceMonitor.DefaultInterface()
+	if defaultInterface == nil {
+		return ""
+	}
+	return defaultInterface.Name
 }
 
 func usableInterface(interfaceName string, excludedIPs []net.IP) bool {

@@ -13,10 +13,12 @@ import (
 	"github.com/Eclipsky1337/zju-portal-core/core"
 	"github.com/Eclipsky1337/zju-portal-core/internal/systemdns"
 	"github.com/Eclipsky1337/zju-portal-core/log"
-	tun "github.com/mythologyli/sing-tun"
+	tun "github.com/sagernet/sing-tun"
+	"github.com/sagernet/sing/common/control"
 	E "github.com/sagernet/sing/common/exceptions"
 	"github.com/sagernet/sing/common/logger"
 	M "github.com/sagernet/sing/common/metadata"
+	N "github.com/sagernet/sing/common/network"
 )
 
 const (
@@ -54,19 +56,21 @@ type tunService struct {
 	newDevice func(tun.Options) (tun.Tun, error)
 	newStack  func(string, tun.StackOptions) (tun.Stack, error)
 
-	mu        sync.RWMutex
-	device    tun.Tun
-	stack     tun.Stack
-	addr      net.Addr
-	closed    bool
-	startOnce sync.Once
-	startErr  error
-	closeOnce sync.Once
-	closeErr  error
-	closeDone chan struct{}
-	runErr    error
-	done      chan struct{}
-	doneOnce  sync.Once
+	mu               sync.RWMutex
+	device           tun.Tun
+	stack            tun.Stack
+	networkMonitor   tun.NetworkUpdateMonitor
+	interfaceMonitor tun.DefaultInterfaceMonitor
+	addr             net.Addr
+	closed           bool
+	startOnce        sync.Once
+	startErr         error
+	closeOnce        sync.Once
+	closeErr         error
+	closeDone        chan struct{}
+	runErr           error
+	done             chan struct{}
+	doneOnce         sync.Once
 
 	udpFlowMu sync.Mutex
 	udpFlows  map[*tunUDPFlow]struct{}
@@ -130,12 +134,9 @@ func newTUNService(config TUNConfig, outbound core.Outbound, observer core.Conne
 		}
 	}
 	service := &tunService{
-		config:   config,
-		outbound: outbound,
-		observer: observer,
-		newDevice: func(options tun.Options) (tun.Tun, error) {
-			return tun.New(options)
-		},
+		config:    config,
+		outbound:  outbound,
+		observer:  observer,
 		newStack:  tun.NewStack,
 		udpFlows:  make(map[*tunUDPFlow]struct{}),
 		done:      make(chan struct{}),
@@ -143,6 +144,7 @@ func newTUNService(config TUNConfig, outbound core.Outbound, observer core.Conne
 		systemDNS: config.SystemDNS,
 		dnsServer: dnsServer,
 	}
+	service.newDevice = service.createDevice
 	if config.FakeIP {
 		fakeIPs, err := newFakeIPStore(config.FakeIPRange)
 		if err != nil {
@@ -151,6 +153,68 @@ func newTUNService(config TUNConfig, outbound core.Outbound, observer core.Conne
 		service.fakeIPs = fakeIPs
 	}
 	return service, nil
+}
+
+func (service *tunService) createDevice(options tun.Options) (tun.Tun, error) {
+	interfaceFinder := control.NewDefaultInterfaceFinder()
+	if err := interfaceFinder.Update(); err != nil {
+		return nil, fmt.Errorf("initialize TUN interface finder: %w", err)
+	}
+	networkMonitor, err := tun.NewNetworkUpdateMonitor(logger.NOP())
+	if err != nil {
+		return nil, fmt.Errorf("create TUN network monitor: %w", err)
+	}
+	if err := networkMonitor.Start(); err != nil {
+		_ = networkMonitor.Close()
+		return nil, fmt.Errorf("start TUN network monitor: %w", err)
+	}
+	interfaceMonitor, err := tun.NewDefaultInterfaceMonitor(networkMonitor, logger.NOP(), tun.DefaultInterfaceMonitorOptions{
+		InterfaceFinder:    interfaceFinder,
+		OverrideAndroidVPN: true,
+	})
+	if err != nil {
+		_ = networkMonitor.Close()
+		return nil, fmt.Errorf("create TUN interface monitor: %w", err)
+	}
+	if err := interfaceMonitor.Start(); err != nil {
+		_ = interfaceMonitor.Close()
+		_ = networkMonitor.Close()
+		return nil, fmt.Errorf("start TUN interface monitor: %w", err)
+	}
+	options.InterfaceFinder = interfaceFinder
+	options.InterfaceMonitor = interfaceMonitor
+	device, err := tun.New(options)
+	if err != nil {
+		_ = interfaceMonitor.Close()
+		_ = networkMonitor.Close()
+		return nil, err
+	}
+	service.mu.Lock()
+	service.networkMonitor = networkMonitor
+	service.interfaceMonitor = interfaceMonitor
+	service.mu.Unlock()
+	return device, nil
+}
+
+func (service *tunService) closeMonitors() error {
+	service.mu.Lock()
+	interfaceMonitor := service.interfaceMonitor
+	networkMonitor := service.networkMonitor
+	service.interfaceMonitor = nil
+	service.networkMonitor = nil
+	service.mu.Unlock()
+	err := errors.Join(
+		closeTUNMonitor(interfaceMonitor),
+		closeTUNMonitor(networkMonitor),
+	)
+	return err
+}
+
+func closeTUNMonitor(monitor interface{ Close() error }) error {
+	if monitor == nil {
+		return nil
+	}
+	return monitor.Close()
 }
 
 func tunDNSServerAddress(prefix netip.Prefix) (netip.Addr, error) {
@@ -183,43 +247,59 @@ func (service *tunService) start(ctx context.Context) error {
 	name := tun.CalculateInterfaceName(service.config.Name)
 	routeAddresses := service.routeAddresses()
 	options := tun.Options{
-		Name:              name,
-		MTU:               service.config.MTU,
-		Inet4Address:      []netip.Prefix{prefix},
-		AutoRoute:         service.config.AutoRoute,
-		StrictRoute:       service.config.StrictRoute,
-		Inet4RouteAddress: routeAddresses,
-		TableIndex:        1898,
-		Logger:            logger.NOP(),
+		Name:                                  name,
+		MTU:                                   service.config.MTU,
+		Inet4Address:                          []netip.Prefix{prefix},
+		AutoRoute:                             service.config.AutoRoute,
+		StrictRoute:                           service.config.StrictRoute,
+		Inet4RouteAddress:                     routeAddresses,
+		IPRoute2TableIndex:                    1898,
+		IPRoute2RuleIndex:                     tun.DefaultIPRoute2RuleIndex,
+		IPRoute2AutoRedirectFallbackRuleIndex: tun.DefaultIPRoute2AutoRedirectFallbackRuleIndex,
+		EXP_DisableDNSHijack:                  !service.config.DNSHijack,
+		Logger:                                logger.NOP(),
+	}
+	if service.config.DNSHijack {
+		dnsAddress, parseErr := netip.ParseAddr(service.dnsServer)
+		if parseErr != nil {
+			return fmt.Errorf("parse TUN DNS server %q: %w", service.dnsServer, parseErr)
+		}
+		options.DNSServers = []netip.Addr{dnsAddress}
 	}
 	device, err := service.newDevice(options)
 	if err != nil {
 		return fmt.Errorf("create TUN device: %w", err)
 	}
+	if err := device.Start(); err != nil {
+		_ = device.Close()
+		_ = service.closeMonitors()
+		return fmt.Errorf("start TUN device: %w", err)
+	}
 	monitoredDevice := wrapTUNDevice(device, service.handleDeviceError)
 	stack, err := service.newStack(tunStackName(service.config.Stack), tun.StackOptions{
-		Context:      ctx,
-		Tun:          monitoredDevice,
-		Name:         name,
-		MTU:          service.config.MTU,
-		Inet4Address: []netip.Prefix{prefix},
-		UDPTimeout:   int64(service.config.UDPTimeout / time.Second),
-		Handler:      service,
-		Logger:       logger.NOP(),
+		Context:    ctx,
+		Tun:        monitoredDevice,
+		TunOptions: options,
+		UDPTimeout: service.config.UDPTimeout,
+		Handler:    service,
+		Logger:     logger.NOP(),
 	})
 	if err != nil {
 		_ = device.Close()
+		_ = service.closeMonitors()
 		return fmt.Errorf("create TUN stack: %w", err)
 	}
 	if err := stack.Start(); err != nil {
 		_ = stack.Close()
 		_ = device.Close()
+		_ = service.closeMonitors()
 		return fmt.Errorf("start TUN stack: %w", err)
 	}
 	if service.systemDNS != nil {
 		if err := service.systemDNS.Apply(ctx, service.dnsServer); err != nil {
 			_ = stack.Close()
 			_ = device.Close()
+			_ = service.closeMonitors()
 			return fmt.Errorf("configure system DNS: %w", err)
 		}
 		log.Printf("System DNS on %s now uses %s", service.config.OutboundInterface, service.dnsServer)
@@ -233,6 +313,7 @@ func (service *tunService) start(ctx context.Context) error {
 		}
 		_ = stack.Close()
 		_ = device.Close()
+		_ = service.closeMonitors()
 		return context.Canceled
 	}
 	service.device = device
@@ -263,7 +344,7 @@ func (service *tunService) routeAddresses() []netip.Prefix {
 
 func tunStackName(configured string) string {
 	if configured == "" || configured == defaultTUNStack {
-		return ""
+		return automaticTUNStackName
 	}
 	return configured
 }
@@ -317,6 +398,7 @@ func (service *tunService) close() {
 	if device != nil {
 		closeErrors = append(closeErrors, device.Close())
 	}
+	closeErrors = append(closeErrors, service.closeMonitors())
 	service.closeErr = errors.Join(closeErrors...)
 	service.signalDone()
 	close(service.closeDone)
@@ -340,6 +422,17 @@ func (service *tunService) handleDeviceError(err error) {
 }
 
 func (service *tunService) signalDone() { service.doneOnce.Do(func() { close(service.done) }) }
+
+func (service *tunService) PrepareConnection(string, M.Socksaddr, M.Socksaddr, tun.DirectRouteContext, time.Duration) (tun.DirectRouteDestination, error) {
+	return nil, nil
+}
+
+func (service *tunService) NewConnectionEx(ctx context.Context, inbound net.Conn, source, destination M.Socksaddr, onClose N.CloseHandlerFunc) {
+	err := service.NewConnection(ctx, inbound, M.Metadata{Source: source, Destination: destination})
+	if onClose != nil {
+		onClose(err)
+	}
+}
 
 func (service *tunService) NewConnection(ctx context.Context, inbound net.Conn, metadata M.Metadata) error {
 	if service.config.DNSHijack && metadata.Destination.Port == 53 {

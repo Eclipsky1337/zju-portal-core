@@ -3,9 +3,8 @@ package networkruntime
 import (
 	"io"
 
-	tun "github.com/mythologyli/sing-tun"
+	tun "github.com/sagernet/sing-tun"
 	"github.com/sagernet/sing/common/buf"
-	N "github.com/sagernet/sing/common/network"
 )
 
 type monitoredTUN struct {
@@ -25,14 +24,6 @@ func (device *monitoredTUN) Write(buffer []byte) (int, error) {
 	return count, err
 }
 
-func (device *monitoredTUN) CreateVectorisedWriter() N.VectorisedWriter {
-	writer := device.Tun.CreateVectorisedWriter()
-	if writer == nil {
-		return nil
-	}
-	return &monitoredVectorisedWriter{VectorisedWriter: writer, onError: device.onError}
-}
-
 func (device *monitoredTUN) report(err error) {
 	if err != nil && device.onError != nil {
 		device.onError(err)
@@ -50,21 +41,56 @@ func (device *monitoredWinTUN) ReadPacket() ([]byte, func(), error) {
 	return packet, release, err
 }
 
-type monitoredVectorisedWriter struct {
-	N.VectorisedWriter
-	onError func(error)
+type monitoredDarwinTUN struct {
+	*monitoredTUN
+	darwinTUN tun.DarwinTUN
 }
 
-func (writer *monitoredVectorisedWriter) WriteVectorised(buffers []*buf.Buffer) error {
-	err := writer.VectorisedWriter.WriteVectorised(buffers)
-	if err != nil && writer.onError != nil {
-		writer.onError(err)
-	}
+type monitoredLinuxTUN struct {
+	*monitoredTUN
+	linuxTUN tun.LinuxTUN
+}
+
+func (device *monitoredLinuxTUN) FrontHeadroom() int { return device.linuxTUN.FrontHeadroom() }
+
+func (device *monitoredLinuxTUN) BatchSize() int { return device.linuxTUN.BatchSize() }
+
+func (device *monitoredLinuxTUN) BatchRead(buffers [][]byte, offset int, readN []int) (int, error) {
+	count, err := device.linuxTUN.BatchRead(buffers, offset, readN)
+	device.report(err)
+	return count, err
+}
+
+func (device *monitoredLinuxTUN) BatchWrite(buffers [][]byte, offset int) (int, error) {
+	count, err := device.linuxTUN.BatchWrite(buffers, offset)
+	device.report(err)
+	return count, err
+}
+
+func (device *monitoredLinuxTUN) TXChecksumOffload() bool {
+	return device.linuxTUN.TXChecksumOffload()
+}
+
+func (device *monitoredDarwinTUN) BatchRead() ([]*buf.Buffer, error) {
+	packets, err := device.darwinTUN.BatchRead()
+	device.report(err)
+	return packets, err
+}
+
+func (device *monitoredDarwinTUN) BatchWrite(buffers []*buf.Buffer) error {
+	err := device.darwinTUN.BatchWrite(buffers)
+	device.report(err)
 	return err
 }
 
 func wrapStandardTUNDevice(device tun.Tun, onError func(error)) tun.Tun {
 	monitored := &monitoredTUN{Tun: device, onError: onError}
+	if darwinTUN, ok := device.(tun.DarwinTUN); ok {
+		return &monitoredDarwinTUN{monitoredTUN: monitored, darwinTUN: darwinTUN}
+	}
+	if linuxTUN, ok := device.(tun.LinuxTUN); ok {
+		return &monitoredLinuxTUN{monitoredTUN: monitored, linuxTUN: linuxTUN}
+	}
 	if winTUN, ok := device.(tun.WinTun); ok {
 		return &monitoredWinTUN{monitoredTUN: monitored, winTUN: winTUN}
 	}

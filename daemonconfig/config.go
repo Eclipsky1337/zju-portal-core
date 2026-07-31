@@ -276,10 +276,8 @@ func (config Config) Validate() error {
 	if config.Control.REST.Secret != "" && config.Control.REST.SecretFile != "" {
 		return fmt.Errorf("control.rest.secret and secret-file are mutually exclusive")
 	}
-	if config.Control.REST.Enabled {
-		if !isLoopbackListen(config.Control.REST.Listen) {
-			return fmt.Errorf("control.rest.listen must use a loopback address")
-		}
+	if config.Control.REST.Enabled && config.Control.REST.Listen == "" {
+		return fmt.Errorf("control.rest.listen is required when enabled")
 	}
 	if config.Inbounds.SOCKS5.Enabled && config.Inbounds.SOCKS5.Listen == "" {
 		return fmt.Errorf("inbounds.socks5.listen is required when enabled")
@@ -380,11 +378,18 @@ func (config Config) TUNConfig() TUNConfig {
 
 func (config Config) SecurityWarnings() []string {
 	var warnings []string
+	if config.Control.REST.Enabled && !isLoopbackListen(config.Control.REST.Listen) {
+		warnings = append(warnings, fmt.Sprintf("REST control %s is exposed over plaintext HTTP outside loopback", config.Control.REST.Listen))
+	}
 	if config.Inbounds.SOCKS5.Enabled && !isLoopbackListen(config.Inbounds.SOCKS5.Listen) {
-		warnings = append(warnings, fmt.Sprintf("SOCKS5 inbound %s is not limited to loopback", config.Inbounds.SOCKS5.Listen))
+		warning := fmt.Sprintf("SOCKS5 inbound %s is not limited to loopback", config.Inbounds.SOCKS5.Listen)
+		if config.Inbounds.SOCKS5.Username == "" {
+			warning += " and does not require authentication"
+		}
+		warnings = append(warnings, warning)
 	}
 	if config.Inbounds.HTTP.Enabled && !isLoopbackListen(config.Inbounds.HTTP.Listen) {
-		warnings = append(warnings, fmt.Sprintf("HTTP inbound %s is not limited to loopback", config.Inbounds.HTTP.Listen))
+		warnings = append(warnings, fmt.Sprintf("HTTP inbound %s is not limited to loopback and does not require authentication", config.Inbounds.HTTP.Listen))
 	}
 	if config.DNS.Listen != "" && !isLoopbackListen(config.DNS.Listen) {
 		warnings = append(warnings, fmt.Sprintf("DNS service %s is not limited to loopback", config.DNS.Listen))

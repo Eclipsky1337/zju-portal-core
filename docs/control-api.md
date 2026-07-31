@@ -19,17 +19,20 @@
 control:
   rest:
     enabled: true
-    listen: 127.0.0.1:9090
+    listen: 0.0.0.0:9090
     secret: ""
     secret-file: /path/to/rest.token
 ```
 
-REST 只允许监听回环地址。不要把 Token 直接写入命令历史、日志、提交或 issue。
+`listen` 可以使用回环地址、指定的局域网地址或 `0.0.0.0`/`[::]`。非回环监听会通过
+明文 HTTP 暴露控制、配置和事件接口，应仅在可信局域网或防火墙保护下使用。远程访问必须
+妥善保护 Bearer Token；不要把 Token 直接写入命令历史、日志、提交或 issue。
 
 也可以临时通过命令行启用：
 
 ```bash
 zju-portal-core --rest 127.0.0.1:9090
+zju-portal-core --rest 0.0.0.0:9090
 ```
 
 未配置 `secret` 或 `secret-file` 时，Core 会生成随机 Token 并输出到标准错误。

@@ -109,6 +109,9 @@ func runDaemon(ctx context.Context, args []string, stdin io.Reader, stdout, stde
 	if logCloser != nil {
 		defer logCloser.Close()
 	}
+	for _, warning := range config.SecurityWarnings() {
+		zlog.Printf("Security warning: %s", warning)
+	}
 
 	manager := newManager()
 	controller := daemonruntime.New(manager, options.configPath)
@@ -222,11 +225,6 @@ func startRESTServer(ctx context.Context, service *controlv1.Service, config dae
 	listener, err := net.Listen("tcp", config.Listen)
 	if err != nil {
 		return nil, fmt.Errorf("listen REST control on %s: %w", config.Listen, err)
-	}
-	address, ok := listener.Addr().(*net.TCPAddr)
-	if !ok || !address.IP.IsLoopback() {
-		_ = listener.Close()
-		return nil, fmt.Errorf("REST control must listen on loopback, got %s", listener.Addr())
 	}
 	secret, err := restSecret(config)
 	if err != nil {

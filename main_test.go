@@ -52,12 +52,17 @@ func TestDaemonStdioReservesStdoutForJSONL(t *testing.T) {
 	}
 }
 
-func TestDaemonRESTBootstrapWithoutConfig(t *testing.T) {
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
+func TestDaemonRESTBootstrapOnNonLoopback(t *testing.T) {
+	listener, err := net.Listen("tcp", "0.0.0.0:0")
 	if err != nil {
 		t.Fatal(err)
 	}
-	address := listener.Addr().String()
+	_, port, err := net.SplitHostPort(listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	listenAddress := net.JoinHostPort("0.0.0.0", port)
+	requestAddress := net.JoinHostPort("127.0.0.1", port)
 	if err := listener.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -67,7 +72,7 @@ func TestDaemonRESTBootstrapWithoutConfig(t *testing.T) {
 	var stderr synchronizedBuffer
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- runDaemon(ctx, []string{"--rest", address}, strings.NewReader(""), io.Discard, &stderr, func() core.Manager { return coremanager.New() })
+		errCh <- runDaemon(ctx, []string{"--rest", listenAddress}, strings.NewReader(""), io.Discard, &stderr, func() core.Manager { return coremanager.New() })
 	}()
 
 	client := &http.Client{Timeout: 500 * time.Millisecond}
@@ -80,7 +85,7 @@ func TestDaemonRESTBootstrapWithoutConfig(t *testing.T) {
 			time.Sleep(10 * time.Millisecond)
 			continue
 		}
-		request, requestErr := http.NewRequest(http.MethodGet, "http://"+address+"/api/v1/hello", nil)
+		request, requestErr := http.NewRequest(http.MethodGet, "http://"+requestAddress+"/api/v1/hello", nil)
 		if requestErr != nil {
 			t.Fatal(requestErr)
 		}

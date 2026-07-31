@@ -157,14 +157,26 @@ func TestConfigCopiesHostsAcrossPublicBoundaries(t *testing.T) {
 func TestConfigSecurityWarningsForNonLoopbackServices(t *testing.T) {
 	config := Default()
 	config.Session.AutoStart = false
+	config.Control.REST.Enabled = true
+	config.Control.REST.Listen = "0.0.0.0:9090"
 	config.Inbounds.SOCKS5.Enabled = true
 	config.Inbounds.SOCKS5.Listen = "0.0.0.0:1080"
 	config.Inbounds.HTTP.Enabled = true
 	config.Inbounds.HTTP.Listen = "127.0.0.1:1081"
 	config.DNS.Listen = "[::]:5353"
 	warnings := config.SecurityWarnings()
-	if len(warnings) != 2 || !strings.Contains(warnings[0], "SOCKS5") || !strings.Contains(warnings[1], "DNS") {
+	if len(warnings) != 3 || !strings.Contains(warnings[0], "REST") || !strings.Contains(warnings[1], "SOCKS5") || !strings.Contains(warnings[2], "DNS") {
 		t.Fatalf("security warnings = %#v", warnings)
+	}
+}
+
+func TestConfigAllowsNonLoopbackREST(t *testing.T) {
+	config := Default()
+	config.Session.AutoStart = false
+	config.Control.REST.Enabled = true
+	config.Control.REST.Listen = "0.0.0.0:9090"
+	if err := config.Validate(); err != nil {
+		t.Fatalf("Validate() error = %v", err)
 	}
 }
 
@@ -178,7 +190,7 @@ func TestConfigRejectsValuesThatCannotStart(t *testing.T) {
 		{name: "negative node interval", mutate: func(config *Config) { config.ATrust.UpdateBestNodesInterval = -1 }},
 		{name: "internet outbound", mutate: func(config *Config) { config.Routing.InternetOutbound.Type = "unknown" }},
 		{name: "dns ttl", mutate: func(config *Config) { config.DNS.CacheTTL = 0 }},
-		{name: "non-loopback rest", mutate: func(config *Config) { config.Control.REST.Enabled = true; config.Control.REST.Listen = "0.0.0.0:9090" }},
+		{name: "missing rest listen", mutate: func(config *Config) { config.Control.REST.Enabled = true; config.Control.REST.Listen = "" }},
 		{name: "missing socks listen", mutate: func(config *Config) { config.Inbounds.SOCKS5.Enabled = true; config.Inbounds.SOCKS5.Listen = "" }},
 		{name: "missing http listen", mutate: func(config *Config) { config.Inbounds.HTTP.Enabled = true; config.Inbounds.HTTP.Listen = "" }},
 		{name: "tun mtu", mutate: func(config *Config) { config.Inbounds.TUN.Enabled = true; config.Inbounds.TUN.MTU = 0 }},

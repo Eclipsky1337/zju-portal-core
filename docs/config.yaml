@@ -17,6 +17,8 @@ control:
     enabled: true
 
     # REST 监听地址
+    # 设置为局域网 IP 或 0.0.0.0 可接受局域网请求
+    # 非回环监听使用明文 HTTP 和 Bearer Token，仅应在可信网络或防火墙保护下使用
     listen: 127.0.0.1:9090
 
     # REST Bearer Token 留空且 secret-file 也为空时，启动时自动生成随机 Token
@@ -129,7 +131,8 @@ inbounds:
     # 是否启动 SOCKS5 入站代理
     enabled: true
 
-    # SOCKS5 监听地址
+    # SOCKS5 监听地址，设置为局域网 IP 或 0.0.0.0 可供其他设备使用
+    # 非回环监听建议同时配置用户名和密码；SOCKS5 本身不加密流量和凭据
     listen: 127.0.0.1:1080
 
     # SOCKS5 用户名
@@ -142,7 +145,8 @@ inbounds:
     # 是否启动 HTTP CONNECT 入站代理
     enabled: true
 
-    # HTTP 代理监听地址
+    # HTTP 代理监听地址，设置为局域网 IP 或 0.0.0.0 可供其他设备使用
+    # 当前 HTTP 代理不提供认证，仅应在可信局域网或防火墙保护下开放
     listen: 127.0.0.1:1081
 
   tun:

@@ -39,7 +39,7 @@ jobs:
           fi
 
       - name: Run tests
-        run: go test ./...
+        run: go test -tags with_gvisor ./...
 
       - name: Build release archives
         shell: bash
@@ -57,15 +57,10 @@ jobs:
             local extension="$3"
             local package_name="zju-portal-core_${GITHUB_REF_NAME}_${goos}_${goarch}"
             local package_dir="dist/${package_name}"
-            local build_tags=()
-
-            if [[ "$goos" == "darwin" ]]; then
-              build_tags=(-tags with_gvisor)
-            fi
 
             mkdir -p "${package_dir}/docs"
             CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" go build \
-              "${build_tags[@]}" \
+              -tags with_gvisor \
               -trimpath \
               -ldflags="-s -w -X main.CommitID=${short_commit}" \
               -o "${package_dir}/zju-portal-core${extension}" \

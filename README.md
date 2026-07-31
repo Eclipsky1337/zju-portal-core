@@ -51,7 +51,7 @@ Build:
 ```bash
 git clone https://github.com/Eclipsky1337/zju-portal-core.git
 cd zju-portal-core && go mod download
-go build -o zju-portal-core .
+go build -tags with_gvisor -o zju-portal-core .
 ```
 
 ## Credits

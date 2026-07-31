@@ -45,15 +45,10 @@ jobs:
             local extension="$3"
             local package_name="zju-portal-core_${version}-${short_commit}_${goos}_${goarch}"
             local package_dir="dist/${package_name}"
-            local build_tags=()
-
-            if [[ "$goos" == "darwin" ]]; then
-              build_tags=(-tags with_gvisor)
-            fi
 
             mkdir -p "${package_dir}/docs"
             CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" go build \
-              "${build_tags[@]}" \
+              -tags with_gvisor \
               -trimpath \
               -ldflags="-s -w -X main.CommitID=${short_commit}" \
               -o "${package_dir}/zju-portal-core${extension}" \

@@ -184,6 +184,35 @@ func TestStartClassifiesSetupError(t *testing.T) {
 	if code := core.ErrorCodeOf(err); code != core.ErrorCodeATrustSetupFailed {
 		t.Fatalf("error code = %q", code)
 	}
+	if core.IsRetryable(err) {
+		t.Fatal("plain login failure was marked retryable")
+	}
+}
+
+func TestStartPreservesStructuredSetupError(t *testing.T) {
+	wantErr := core.WrapError(core.ErrorCodeAuthHandlerUnavailable, "authentication handler is unavailable", false, nil)
+	deps := defaultDependencies()
+	deps.setup = func(context.Context, *atrustclient.Client, Config, []byte, []byte, func(atrustclient.SetupStage)) ([]byte, error) {
+		return nil, wantErr
+	}
+
+	_, err := start(context.Background(), Config{}, deps)
+	if core.ErrorCodeOf(err) != core.ErrorCodeAuthHandlerUnavailable || core.IsRetryable(err) {
+		t.Fatalf("start() error = %#v", err)
+	}
+}
+
+func TestStartMarksTransientNetworkSetupErrorRetryable(t *testing.T) {
+	wantErr := &net.DNSError{Err: "temporary failure", Name: "vpn.example.edu", IsTimeout: true}
+	deps := defaultDependencies()
+	deps.setup = func(context.Context, *atrustclient.Client, Config, []byte, []byte, func(atrustclient.SetupStage)) ([]byte, error) {
+		return nil, wantErr
+	}
+
+	_, err := start(context.Background(), Config{}, deps)
+	if !errors.Is(err, wantErr) || core.ErrorCodeOf(err) != core.ErrorCodeATrustSetupFailed || !core.IsRetryable(err) {
+		t.Fatalf("start() error = %#v", err)
+	}
 }
 
 func TestStartClassifiesClientDataWriteError(t *testing.T) {

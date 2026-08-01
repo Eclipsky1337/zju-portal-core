@@ -2,9 +2,13 @@ package atrustruntime
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io"
+	"net"
 	"os"
 	"sync"
+	"syscall"
 	"time"
 
 	clientpkg "github.com/Eclipsky1337/zju-portal-core/client"
@@ -372,7 +376,7 @@ func startWithStageHandler(ctx context.Context, config Config, deps dependencies
 	clientData, err := deps.setup(ctx, atrustClient, config, clientData, resourceData, stageHandler)
 	if err != nil {
 		runtime.Close()
-		return nil, core.WrapError(core.ErrorCodeATrustSetupFailed, "setup aTrust client", false, err)
+		return nil, wrapATrustSetupError(err)
 	}
 	runtime.resumeState = encodeResumeState(config, atrustClient, clientData, resumeRevision+1)
 
@@ -407,4 +411,43 @@ func startWithStageHandler(ctx context.Context, config Config, deps dependencies
 	}
 
 	return runtime, nil
+}
+
+func wrapATrustSetupError(err error) error {
+	code := core.ErrorCodeOf(err)
+	if code == core.ErrorCodeUnknown {
+		code = core.ErrorCodeATrustSetupFailed
+	}
+	return core.WrapError(code, "setup aTrust client", isRetryableATrustSetupError(err), err)
+}
+
+func isRetryableATrustSetupError(err error) bool {
+	if core.ErrorCodeOf(err) != core.ErrorCodeUnknown {
+		return core.IsRetryable(err)
+	}
+	if errors.Is(err, context.Canceled) {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+		return true
+	}
+	var networkError net.Error
+	if errors.As(err, &networkError) && (networkError.Timeout() || networkError.Temporary()) {
+		return true
+	}
+	for _, retryable := range []error{
+		syscall.ECONNABORTED,
+		syscall.ECONNREFUSED,
+		syscall.ECONNRESET,
+		syscall.EHOSTUNREACH,
+		syscall.ENETDOWN,
+		syscall.ENETRESET,
+		syscall.ENETUNREACH,
+		syscall.ETIMEDOUT,
+	} {
+		if errors.Is(err, retryable) {
+			return true
+		}
+	}
+	return false
 }

@@ -259,6 +259,9 @@ func (s *Session) reconnect(ctx context.Context, failedRuntime *Runtime, runtime
 
 		candidate, err := startWithStageHandler(ctx, config, s.deps, nil)
 		if err != nil {
+			if ctx.Err() != nil {
+				return nil
+			}
 			coreError := asCoreError(core.ErrorCodeSessionReconnectFailed, "reconnect session", err)
 			s.mu.Lock()
 			s.lastError = coreError
@@ -270,6 +273,16 @@ func (s *Session) reconnect(ctx context.Context, failedRuntime *Runtime, runtime
 				Error:     coreError,
 				Reconnect: &core.ReconnectInfo{Attempt: attempt},
 			})
+			if !core.IsRetryable(err) {
+				s.mu.RLock()
+				network := s.network
+				s.mu.RUnlock()
+				if network != nil {
+					_ = network.Close(context.Background())
+				}
+				s.failWith(coreError.Code, coreError.Message, coreError)
+				return nil
+			}
 			continue
 		}
 

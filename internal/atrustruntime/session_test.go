@@ -782,8 +782,8 @@ func TestManagedSessionRetriesReconnectAfterFailure(t *testing.T) {
 	deps.readResources = successfulSessionDependencies().readResources
 	var setupCalls atomic.Int32
 	deps.setup = func(_ context.Context, _ *atrustclient.Client, _ Config, _ []byte, _ []byte, stageHandler func(atrustclient.SetupStage)) ([]byte, error) {
-		call := setupCalls.Add(1)
-		if call == 1 {
+		setupCalls.Add(1)
+		if stageHandler != nil {
 			for _, stage := range []atrustclient.SetupStage{
 				atrustclient.SetupStageDiscoveringAuth,
 				atrustclient.SetupStageAuthenticating,
@@ -793,18 +793,18 @@ func TestManagedSessionRetriesReconnectAfterFailure(t *testing.T) {
 			} {
 				stageHandler(stage)
 			}
-			return clientData, nil
-		}
-		if call == 2 {
-			return nil, errors.New("temporary reconnect failure")
 		}
 		return clientData, nil
 	}
 	firstOutbound := newHealthOutboundStub()
 	var networkCalls atomic.Int32
 	deps.setupNetwork = func(ctx context.Context, client clientpkg.Client, config Config) (core.Outbound, error) {
-		if networkCalls.Add(1) == 1 {
+		call := networkCalls.Add(1)
+		if call == 1 {
 			return firstOutbound, nil
+		}
+		if call == 2 {
+			return nil, core.WrapError(core.ErrorCodeOutboundUnavailable, "temporary reconnect failure", true, nil)
 		}
 		if config.NetworkRuntime != firstOutbound {
 			t.Fatalf("reconnect network runtime = %#v", config.NetworkRuntime)
@@ -841,8 +841,50 @@ func TestManagedSessionRetriesReconnectAfterFailure(t *testing.T) {
 	if !reflect.DeepEqual(gotDelays, []time.Duration{0, time.Second}) {
 		t.Fatalf("reconnect delays = %v", gotDelays)
 	}
-	if setupCalls.Load() != 3 || networkCalls.Load() != 2 {
+	if setupCalls.Load() != 3 || networkCalls.Load() != 3 {
 		t.Fatalf("setup calls = %d, network calls = %d", setupCalls.Load(), networkCalls.Load())
+	}
+	if _, err := session.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestManagedSessionStopsReconnectAfterNonRetryableFailure(t *testing.T) {
+	deps := successfulSessionDependencies()
+	var setupCalls atomic.Int32
+	baseSetup := deps.setup
+	deps.setup = func(ctx context.Context, client *atrustclient.Client, config Config, clientData, resourceData []byte, stageHandler func(atrustclient.SetupStage)) ([]byte, error) {
+		setupCalls.Add(1)
+		return baseSetup(ctx, client, config, clientData, resourceData, stageHandler)
+	}
+	deps.wait = func(context.Context, time.Duration) error { return nil }
+	outbound := newHealthOutboundStub()
+	var networkCalls atomic.Int32
+	deps.setupNetwork = func(context.Context, clientpkg.Client, Config) (core.Outbound, error) {
+		if networkCalls.Add(1) > 1 {
+			return nil, core.WrapError(core.ErrorCodeRestartRequired, "restart required", false, nil)
+		}
+		return outbound, nil
+	}
+	session := newSession("session-reconnect-terminal", Config{SetupNetwork: true}, deps)
+	if err := session.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	outbound.fail(errors.New("network stack stopped"))
+	events := collectEventsUntil(t, session.Events(), core.EventTypeSessionError)
+	assertEventTypePresent(t, events, core.EventTypeReconnectFailed)
+	if status := session.Status(); status.State != core.SessionStateFailed || status.LastError == nil || status.LastError.Code != core.ErrorCodeRestartRequired {
+		t.Fatalf("status = %#v", status)
+	}
+	if setupCalls.Load() != 2 {
+		t.Fatalf("setup calls = %d, want 2", setupCalls.Load())
+	}
+	if networkCalls.Load() != 2 {
+		t.Fatalf("network calls = %d, want 2", networkCalls.Load())
+	}
+	if !outbound.isClosed() {
+		t.Fatal("network runtime remains open after terminal reconnect failure")
 	}
 	if _, err := session.Close(context.Background()); err != nil {
 		t.Fatal(err)

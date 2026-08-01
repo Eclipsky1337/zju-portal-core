@@ -380,19 +380,6 @@ func startWithStageHandler(ctx context.Context, config Config, deps dependencies
 	}
 	runtime.resumeState = encodeResumeState(config, atrustClient, clientData, resumeRevision+1)
 
-	if config.ClientDataFile != "" {
-		if err := deps.writeFile(config.ClientDataFile, clientData); err != nil {
-			runtime.Close()
-			return nil, core.WrapError(
-				core.ErrorCodeClientDataWriteFailed,
-				fmt.Sprintf("write client data file %q", config.ClientDataFile),
-				false,
-				err,
-			)
-		}
-		log.Printf("Client data saved to %s", config.ClientDataFile)
-	}
-
 	if config.SetupNetwork {
 		outbound, err := deps.setupNetwork(ctx, atrustClient, config)
 		if err != nil {
@@ -408,6 +395,19 @@ func startWithStageHandler(ctx context.Context, config Config, deps dependencies
 		}
 		runtime.outbound = wrapNetwork(outbound)
 		runtime.ownsOutbound = true
+	}
+
+	if config.ClientDataFile != "" {
+		if err := deps.writeFile(config.ClientDataFile, clientData); err != nil {
+			runtime.Close()
+			return nil, core.WrapError(
+				core.ErrorCodeClientDataWriteFailed,
+				fmt.Sprintf("write client data file %q", config.ClientDataFile),
+				false,
+				err,
+			)
+		}
+		log.Printf("Client data saved to %s", config.ClientDataFile)
 	}
 
 	return runtime, nil

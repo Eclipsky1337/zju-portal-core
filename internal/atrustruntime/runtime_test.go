@@ -237,6 +237,33 @@ func TestStartClassifiesClientDataWriteError(t *testing.T) {
 	}
 }
 
+func TestStartDoesNotPersistClientDataWhenNetworkSetupFails(t *testing.T) {
+	wantErr := errors.New("network setup failed")
+	deps := defaultDependencies()
+	deps.readFile = func(string) ([]byte, error) {
+		return []byte(`{"device_id":"old"}`), nil
+	}
+	deps.setup = func(context.Context, *atrustclient.Client, Config, []byte, []byte, func(atrustclient.SetupStage)) ([]byte, error) {
+		return []byte(`{"device_id":"new"}`), nil
+	}
+	deps.setupNetwork = func(context.Context, clientpkg.Client, Config) (core.Outbound, error) {
+		return nil, wantErr
+	}
+	written := false
+	deps.writeFile = func(string, []byte) error {
+		written = true
+		return nil
+	}
+
+	_, err := start(context.Background(), Config{ClientDataFile: "client.json", SetupNetwork: true}, deps)
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("start() error = %v", err)
+	}
+	if written {
+		t.Fatal("client data was persisted before network setup succeeded")
+	}
+}
+
 func TestRuntimeCloseIsIdempotent(t *testing.T) {
 	runtime := &Runtime{client: atrustclient.NewClient("", "", "", "")}
 	runtime.Close()

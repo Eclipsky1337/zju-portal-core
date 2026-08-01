@@ -62,6 +62,7 @@ func defaultInboundFactories() []InboundFactory {
 					Address:           config.TUNAddress,
 					MTU:               config.TUNMTU,
 					AutoRoute:         config.TUNAutoRoute,
+					RouteAll:          config.TUNRouteAll,
 					StrictRoute:       config.TUNStrictRoute,
 					Stack:             config.TUNStack,
 					UDPTimeout:        time.Duration(config.TUNUDPTimeoutSeconds) * time.Second,

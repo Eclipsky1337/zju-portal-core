@@ -2,6 +2,7 @@ package networkruntime
 
 import (
 	"context"
+	"errors"
 	"net"
 	"net/netip"
 	"testing"
@@ -41,8 +42,8 @@ func TestTUNFakeIPDNSRestoresDomainDestination(t *testing.T) {
 		t.Fatalf("fake IP = %v", fakeIP)
 	}
 	destination := M.SocksaddrFrom(address.Unmap(), 443)
-	if got := service.routeDestination(destination); got != "app.example.edu:443" {
-		t.Fatalf("routed destination = %q", got)
+	if got := service.routeDestination(destination); got.dial != "app.example.edu:443" || got.display != "app.example.edu:443" {
+		t.Fatalf("routed destination = %#v", got)
 	}
 }
 
@@ -152,6 +153,66 @@ func TestTUNFakeIPOnlyAppliesToVPNDomains(t *testing.T) {
 	}
 }
 
+func TestTUNRouteAllFakeIPTracksPublicDomainAndPreservesResolvedAddress(t *testing.T) {
+	resolver := &tunResolverStub{ips: map[string]net.IP{
+		"www.example.com": net.ParseIP("203.0.113.8"),
+	}}
+	created, err := newTUNService(TUNConfig{
+		FakeIP:    true,
+		AutoRoute: true,
+		RouteAll:  true,
+		Resolver:  resolver,
+	}, &outboundStub{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := created.(*tunService)
+
+	address := queryTUNARecord(t, service, "www.example.com.")
+	fakeIP, ok := netip.AddrFromSlice(address)
+	if !ok {
+		t.Fatalf("public fake IP = %v", address)
+	}
+	destination := service.routeDestination(M.SocksaddrFrom(fakeIP.Unmap(), 443))
+	if destination.dial != "203.0.113.8:443" || destination.display != "www.example.com:443" {
+		t.Fatalf("public fake IP destination = %#v", destination)
+	}
+}
+
+func TestTUNRouteAllFakeIPPreservesResolutionFailure(t *testing.T) {
+	resolver := &tunResolverStub{err: errors.New("resolution failed")}
+	created, err := newTUNService(TUNConfig{
+		FakeIP:    true,
+		AutoRoute: true,
+		RouteAll:  true,
+		Resolver:  resolver,
+	}, &outboundStub{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := created.(*tunService)
+	query := new(dns.Msg)
+	query.SetQuestion("missing.example.", dns.TypeA)
+	payload, err := query.Pack()
+	if err != nil {
+		t.Fatal(err)
+	}
+	responsePayload, err := service.handleDNSPayload(context.Background(), payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := new(dns.Msg)
+	if err := response.Unpack(responsePayload); err != nil {
+		t.Fatal(err)
+	}
+	if response.Rcode != dns.RcodeServerFailure || len(response.Answer) != 0 {
+		t.Fatalf("DNS response rcode=%d answers=%v", response.Rcode, response.Answer)
+	}
+	if len(service.fakeIPs.domainToIP) != 0 {
+		t.Fatalf("fake IP mappings = %v", service.fakeIPs.domainToIP)
+	}
+}
+
 func TestTUNFakeIPExcludesControlServerDomain(t *testing.T) {
 	resolver := &tunResolverStub{
 		vpnDomains: map[string]bool{
@@ -166,6 +227,7 @@ func TestTUNFakeIPExcludesControlServerDomain(t *testing.T) {
 	created, err := newTUNService(TUNConfig{
 		FakeIP:            true,
 		AutoRoute:         true,
+		RouteAll:          true,
 		Resolver:          resolver,
 		ControlServerHost: " VPN.Example.EDU. ",
 	}, &outboundStub{}, nil)
@@ -317,10 +379,31 @@ func TestFakeIPStoreReusesOnlyStaleAddressWhenExhausted(t *testing.T) {
 	}
 }
 
+func TestFakeIPStoreClearsResolvedAddressWhenAssignmentModeChanges(t *testing.T) {
+	store, err := newFakeIPStore("198.18.0.0/30")
+	if err != nil {
+		t.Fatal(err)
+	}
+	address, err := store.AssignResolved("app.example", netip.MustParseAddr("203.0.113.8"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, resolved, found := store.LookupDestination(address); !found || resolved != netip.MustParseAddr("203.0.113.8") {
+		t.Fatalf("resolved destination = %s, found=%v", resolved, found)
+	}
+	if _, err := store.Assign("app.example"); err != nil {
+		t.Fatal(err)
+	}
+	if _, resolved, found := store.LookupDestination(address); !found || resolved.IsValid() {
+		t.Fatalf("resolved destination after mode change = %s, found=%v", resolved, found)
+	}
+}
+
 type tunResolverStub struct {
 	ip         net.IP
 	ips        map[string]net.IP
 	staticIP   net.IP
+	err        error
 	host       string
 	vpnDomains map[string]bool
 }
@@ -341,6 +424,9 @@ var _ core.Outbound = (*capturingTUNOutbound)(nil)
 
 func (resolver *tunResolverStub) Resolve(ctx context.Context, host string) (context.Context, net.IP, error) {
 	resolver.host = host
+	if resolver.err != nil {
+		return ctx, nil, resolver.err
+	}
 	if resolver.staticIP != nil {
 		return ctx, resolver.staticIP, nil
 	}

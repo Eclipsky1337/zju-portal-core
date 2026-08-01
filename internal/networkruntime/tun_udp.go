@@ -94,7 +94,8 @@ func (service *tunService) NewPacketConnectionEx(ctx context.Context, inbound N.
 }
 
 func (association *tunUDPAssociation) flow(ctx context.Context, destination M.Socksaddr) (*tunUDPFlow, error) {
-	key := association.service.routeDestination(destination)
+	route := association.service.routeDestination(destination)
+	key := route.dial
 	association.mu.Lock()
 	flow := association.flows[key]
 	association.mu.Unlock()
@@ -113,7 +114,7 @@ func (association *tunUDPAssociation) flow(ctx context.Context, destination M.So
 		remote:      remote,
 	}
 	flow.touch()
-	flow.activity = association.service.openActivity("udp", association.source, key, remote)
+	flow.activity = association.service.openActivity("udp", association.source, route.display, remote)
 
 	association.mu.Lock()
 	if existing := association.flows[key]; existing != nil {

@@ -293,6 +293,9 @@ func TestRouteAllTUNKeepsRuleRouter(t *testing.T) {
 			return internet, nil
 		},
 		newTUNService: func(config TUNConfig, outbound core.Outbound, _ core.ConnectionObserver) (managedService, error) {
+			if !config.RouteAll {
+				t.Fatal("route-all flag was not passed to TUN service")
+			}
 			if len(config.RouteAddresses) != 0 {
 				t.Fatalf("route-all TUN routes = %v, want none", config.RouteAddresses)
 			}

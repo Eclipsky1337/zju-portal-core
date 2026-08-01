@@ -36,6 +36,7 @@ type TUNConfig struct {
 	Address           string
 	MTU               uint32
 	AutoRoute         bool
+	RouteAll          bool
 	StrictRoute       bool
 	Stack             string
 	UDPTimeout        time.Duration
@@ -481,12 +482,12 @@ func (service *tunService) NewConnection(ctx context.Context, inbound net.Conn, 
 		return service.handleTCPDNS(ctx, inbound)
 	}
 	destination := service.routeDestination(metadata.Destination)
-	remote, err := service.outbound.DialContext(ctx, "tcp", destination)
+	remote, err := service.outbound.DialContext(ctx, "tcp", destination.dial)
 	if err != nil {
 		_ = inbound.Close()
 		return err
 	}
-	activity := service.openActivity("tcp", metadata.Source.String(), destination, remote)
+	activity := service.openActivity("tcp", metadata.Source.String(), destination.display, remote)
 	if activity != nil {
 		remote = trackLogicalConn(remote, activity)
 	}

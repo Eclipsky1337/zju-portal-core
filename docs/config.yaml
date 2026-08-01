@@ -188,6 +188,7 @@ inbounds:
       hijack: true
 
       # 是否为 VPN 域名和解析到 VPN 资源的域名分配 Fake IP
+      # route-all 为 true 时，所有成功解析的 IPv4 域名都会分配 Fake IP
       # 开启后会自动启用 hijack，并要求 auto-route
       fake-ip: true
 

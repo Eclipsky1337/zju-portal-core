@@ -17,6 +17,7 @@ const (
 type fakeIPEntry struct {
 	domain   string
 	address  netip.Addr
+	resolved netip.Addr
 	lastUsed time.Time
 }
 
@@ -50,11 +51,24 @@ func newFakeIPStore(prefixText string) (*fakeIPStore, error) {
 }
 
 func (store *fakeIPStore) Assign(domain string) (netip.Addr, error) {
+	return store.assign(domain, netip.Addr{})
+}
+
+func (store *fakeIPStore) AssignResolved(domain string, resolved netip.Addr) (netip.Addr, error) {
+	resolved = resolved.Unmap()
+	if !resolved.Is4() {
+		return netip.Addr{}, fmt.Errorf("resolved TUN fake IP destination must be IPv4")
+	}
+	return store.assign(domain, resolved)
+}
+
+func (store *fakeIPStore) assign(domain string, resolved netip.Addr) (netip.Addr, error) {
 	domain = normalizeDomain(domain)
 	now := time.Now()
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	if entry := store.domainToIP[domain]; entry != nil {
+		entry.resolved = resolved
 		entry.lastUsed = now
 		return entry.address, nil
 	}
@@ -65,31 +79,37 @@ func (store *fakeIPStore) Assign(domain string) (netip.Addr, error) {
 		}
 		delete(store.domainToIP, entry.domain)
 		entry.domain = domain
+		entry.resolved = resolved
 		entry.lastUsed = now
 		store.domainToIP[domain] = entry
 		return entry.address, nil
 	}
 	address := uint32ToAddr(store.next)
 	store.next++
-	entry := &fakeIPEntry{domain: domain, address: address, lastUsed: now}
+	entry := &fakeIPEntry{domain: domain, address: address, resolved: resolved, lastUsed: now}
 	store.domainToIP[domain] = entry
 	store.ipToDomain[address] = entry
 	return address, nil
 }
 
 func (store *fakeIPStore) Lookup(address netip.Addr) (string, bool) {
+	domain, _, found := store.LookupDestination(address)
+	return domain, found
+}
+
+func (store *fakeIPStore) LookupDestination(address netip.Addr) (string, netip.Addr, bool) {
 	if !address.IsValid() {
-		return "", false
+		return "", netip.Addr{}, false
 	}
 	address = address.Unmap()
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	entry := store.ipToDomain[address]
 	if entry == nil {
-		return "", false
+		return "", netip.Addr{}, false
 	}
 	entry.lastUsed = time.Now()
-	return entry.domain, true
+	return entry.domain, entry.resolved, true
 }
 
 func (store *fakeIPStore) oldestReusable(now time.Time) *fakeIPEntry {

@@ -28,17 +28,29 @@ type tunFakeIPResolver struct {
 	resolver          tunResolver
 	matcher           tunVPNDomainMatcher
 	controlServerHost string
+	routeAll          bool
 	routes            []netip.Prefix
 	fakeIPs           *fakeIPStore
 }
 
-func (service *tunService) routeDestination(destination M.Socksaddr) string {
+type tunDestination struct {
+	dial    string
+	display string
+}
+
+func (service *tunService) routeDestination(destination M.Socksaddr) tunDestination {
+	result := tunDestination{dial: destination.String(), display: destination.String()}
 	if service.fakeIPs != nil && destination.Addr.IsValid() {
-		if domain, ok := service.fakeIPs.Lookup(destination.Addr); ok {
-			return net.JoinHostPort(domain, strconv.Itoa(int(destination.Port)))
+		if domain, resolved, ok := service.fakeIPs.LookupDestination(destination.Addr); ok {
+			result.display = net.JoinHostPort(domain, strconv.Itoa(int(destination.Port)))
+			if resolved.IsValid() {
+				result.dial = net.JoinHostPort(resolved.String(), strconv.Itoa(int(destination.Port)))
+			} else {
+				result.dial = result.display
+			}
 		}
 	}
-	return destination.String()
+	return result
 }
 
 func (service *tunService) handleUDPDNS(ctx context.Context, inbound N.PacketConn, destination M.Socksaddr, packet *buf.Buffer) error {
@@ -96,6 +108,7 @@ func (service *tunService) handleDNSPayload(ctx context.Context, payload []byte)
 			resolver := &tunFakeIPResolver{
 				resolver:          service.config.Resolver,
 				controlServerHost: normalizeDomain(service.config.ControlServerHost),
+				routeAll:          service.config.RouteAll,
 				routes:            service.config.RouteAddresses,
 				fakeIPs:           service.fakeIPs,
 			}
@@ -125,12 +138,23 @@ func (resolver *tunFakeIPResolver) Resolve(ctx context.Context, host string) (co
 				return resolver.assign(resolvedCtx, host)
 			}
 		}
+		if resolver.routeAll && parsed.Is4() {
+			return resolver.assignResolved(resolvedCtx, host, parsed)
+		}
 	}
 	return resolvedCtx, address, nil
 }
 
 func (resolver *tunFakeIPResolver) assign(ctx context.Context, host string) (context.Context, net.IP, error) {
 	address, err := resolver.fakeIPs.Assign(host)
+	if err != nil {
+		return ctx, nil, err
+	}
+	return ctx, net.IP(address.AsSlice()), nil
+}
+
+func (resolver *tunFakeIPResolver) assignResolved(ctx context.Context, host string, resolved netip.Addr) (context.Context, net.IP, error) {
+	address, err := resolver.fakeIPs.AssignResolved(host, resolved)
 	if err != nil {
 		return ctx, nil, err
 	}

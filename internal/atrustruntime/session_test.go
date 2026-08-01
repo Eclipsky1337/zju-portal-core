@@ -415,7 +415,7 @@ func TestManagedSessionRefreshFailurePreservesResourcesAndNetwork(t *testing.T) 
 		t.Fatal(err)
 	}
 	initialRuntime := session.runtime
-	if err := session.RefreshResources(context.Background()); !errors.Is(err, wantErr) || core.ErrorCodeOf(err) != core.ErrorCodeResourcesUnavailable {
+	if err := session.RefreshResources(context.Background()); !errors.Is(err, wantErr) || core.ErrorCodeOf(err) != core.ErrorCodeATrustSetupFailed || core.IsRetryable(err) {
 		t.Fatalf("RefreshResources() error = %v", err)
 	}
 	resources, err := session.Resources()
@@ -424,6 +424,36 @@ func TestManagedSessionRefreshFailurePreservesResourcesAndNetwork(t *testing.T) 
 	}
 	if session.runtime != initialRuntime || networkCalls.Load() != 1 {
 		t.Fatalf("failed refresh changed runtime: runtime=%p/%p network=%d", session.runtime, initialRuntime, networkCalls.Load())
+	}
+	if _, err := session.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestManagedSessionRefreshPreservesRetryableSetupFailure(t *testing.T) {
+	wantErr := &net.DNSError{Err: "temporary failure", Name: "vpn.example.edu", IsTimeout: true}
+	deps := successfulSessionDependencies()
+	baseSetup := deps.setup
+	var setupCalls atomic.Int32
+	deps.setup = func(ctx context.Context, client *atrustclient.Client, config Config, clientData, resourceData []byte, stageHandler func(atrustclient.SetupStage)) ([]byte, error) {
+		if setupCalls.Add(1) == 2 {
+			return nil, wantErr
+		}
+		return baseSetup(ctx, client, config, clientData, resourceData, stageHandler)
+	}
+	deps.readResources = func(clientpkg.Client) (core.Resources, error) {
+		return core.Resources{ClientIP: "10.0.0.2", IPResources: []core.IPResource{}, DomainResources: map[string]core.DomainResource{}, DNSRecords: map[string]string{}}, nil
+	}
+	outbound := newHealthOutboundStub()
+	deps.setupNetwork = func(context.Context, clientpkg.Client, Config) (core.Outbound, error) { return outbound, nil }
+	session := newSession("session-refresh-retryable-failure", Config{SetupNetwork: true}, deps)
+	if err := session.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	err := session.RefreshResources(context.Background())
+	if !errors.Is(err, wantErr) || core.ErrorCodeOf(err) != core.ErrorCodeATrustSetupFailed || !core.IsRetryable(err) {
+		t.Fatalf("RefreshResources() error = %#v", err)
 	}
 	if _, err := session.Close(context.Background()); err != nil {
 		t.Fatal(err)

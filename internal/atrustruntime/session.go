@@ -610,7 +610,11 @@ func (s *Session) RefreshResources(ctx context.Context) error {
 	}
 	candidate, err := startWithStageHandler(ctx, config, s.deps, nil)
 	if err != nil {
-		return core.WrapError(core.ErrorCodeResourcesUnavailable, "refresh aTrust resources", true, err)
+		code := core.ErrorCodeOf(err)
+		if code == core.ErrorCodeUnknown {
+			code = core.ErrorCodeResourcesUnavailable
+		}
+		return core.WrapError(code, "refresh aTrust resources", core.IsRetryable(err), err)
 	}
 	defer candidate.CloseContext(context.Background())
 	resources, err := s.deps.readResources(candidate.Client())

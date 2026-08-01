@@ -28,7 +28,7 @@ import (
 
 var CommitID string
 
-const coreVersionNumber = "v0.1.0-alpha.4"
+const coreVersionNumber = "v0.1.0-alpha.5"
 const daemonShutdownTimeout = 5 * time.Second
 
 var controlCapabilities = []string{

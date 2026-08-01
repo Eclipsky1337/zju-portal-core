@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -13,8 +12,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"path/filepath"
-	"runtime"
 	"strings"
 	"syscall"
 	"time"
@@ -24,6 +21,7 @@ import (
 	"github.com/Eclipsky1337/zju-portal-core/core"
 	"github.com/Eclipsky1337/zju-portal-core/daemonconfig"
 	"github.com/Eclipsky1337/zju-portal-core/daemonruntime"
+	"github.com/Eclipsky1337/zju-portal-core/internal/resumestate"
 	zlog "github.com/Eclipsky1337/zju-portal-core/log"
 	coremanager "github.com/Eclipsky1337/zju-portal-core/manager"
 )
@@ -116,7 +114,7 @@ func runDaemon(ctx context.Context, args []string, stdin io.Reader, stdout, stde
 	manager := newManager()
 	controller := daemonruntime.New(manager, options.configPath)
 	if config.State.ResumeFile != "" {
-		resumeState, loadErr := loadResumeState(config.State.ResumeFile)
+		resumeState, loadErr := resumestate.Load(config.State.ResumeFile)
 		if loadErr != nil {
 			return loadErr
 		}
@@ -257,72 +255,6 @@ func restSecret(config daemonconfig.RESTConfig) (string, error) {
 	return strings.TrimSpace(string(data)), nil
 }
 
-func loadResumeState(path string) (*core.ResumeState, error) {
-	data, err := os.ReadFile(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, fmt.Errorf("read resume state: %w", err)
-	}
-	var state core.ResumeState
-	if err := json.Unmarshal(data, &state); err != nil {
-		return nil, fmt.Errorf("decode resume state: %w", err)
-	}
-	return &state, nil
-}
-
-func saveResumeState(path string, state core.ResumeState) error {
-	data, err := json.MarshalIndent(state, "", "  ")
-	if err != nil {
-		return err
-	}
-	if err := os.MkdirAll(filepath.Dir(path), 0777); err != nil {
-		return err
-	}
-	metadata, err := inspectResumeStateFile(path)
-	if err != nil {
-		return err
-	}
-	temporary, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".tmp-*")
-	if err != nil {
-		return err
-	}
-	temporaryPath := temporary.Name()
-	removeTemporary := true
-	defer func() {
-		_ = temporary.Close()
-		if removeTemporary {
-			_ = os.Remove(temporaryPath)
-		}
-	}()
-	if _, err := temporary.Write(data); err != nil {
-		return err
-	}
-	if err := applyResumeStateFileMetadata(temporary, metadata); err != nil {
-		return err
-	}
-	if err := temporary.Sync(); err != nil {
-		return err
-	}
-	if err := temporary.Close(); err != nil {
-		return err
-	}
-	if err := os.Rename(temporaryPath, path); err != nil {
-		return err
-	}
-	removeTemporary = false
-	if runtime.GOOS == "windows" {
-		return nil
-	}
-	directory, err := os.Open(filepath.Dir(path))
-	if err != nil {
-		return err
-	}
-	defer directory.Close()
-	return directory.Sync()
-}
-
 type resumeStateProvider interface {
 	ResumeState(core.SessionID) (core.ResumeState, error)
 }
@@ -344,7 +276,7 @@ func persistResumeStateEvents(ctx context.Context, events <-chan core.Event, pro
 				zlog.Printf("read updated resume state: %v", err)
 				continue
 			}
-			if err := saveResumeState(path, state); err != nil {
+			if err := resumestate.Save(path, state); err != nil {
 				zlog.Printf("save resume state: %v", err)
 			}
 		}

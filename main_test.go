@@ -9,8 +9,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"reflect"
-	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -18,6 +16,7 @@ import (
 
 	controlv1 "github.com/Eclipsky1337/zju-portal-core/control/v1"
 	"github.com/Eclipsky1337/zju-portal-core/core"
+	"github.com/Eclipsky1337/zju-portal-core/internal/resumestate"
 	zlog "github.com/Eclipsky1337/zju-portal-core/log"
 	coremanager "github.com/Eclipsky1337/zju-portal-core/manager"
 )
@@ -248,43 +247,6 @@ func TestControlCapabilitiesDescribeImplementedAPIs(t *testing.T) {
 	}
 }
 
-func TestSaveResumeStateAtomically(t *testing.T) {
-	directory := t.TempDir()
-	path := filepath.Join(directory, "resume.json")
-	if err := os.WriteFile(path, []byte("old"), 0666); err != nil {
-		t.Fatal(err)
-	}
-	if runtime.GOOS != "windows" {
-		if err := os.Chmod(path, 0640); err != nil {
-			t.Fatal(err)
-		}
-	}
-	want := core.ResumeState{Format: core.ResumeStateFormatATrustClientData, Version: core.ResumeStateVersion1, Revision: 3, Data: "state"}
-	if err := saveResumeState(path, want); err != nil {
-		t.Fatal(err)
-	}
-	got, err := loadResumeState(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !reflect.DeepEqual(*got, want) {
-		t.Fatalf("resume state = %#v, want %#v", *got, want)
-	}
-	if runtime.GOOS != "windows" {
-		info, err := os.Stat(path)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if gotMode := info.Mode().Perm(); gotMode != 0640 {
-			t.Fatalf("resume state mode = %o, want 640", gotMode)
-		}
-	}
-	temporary, err := filepath.Glob(filepath.Join(directory, ".resume.json.tmp-*"))
-	if err != nil || len(temporary) != 0 {
-		t.Fatalf("temporary files = %v, %v", temporary, err)
-	}
-}
-
 func TestPersistResumeStateEventsSavesUpdatedRevision(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "resume.json")
 	provider := resumeStateProviderStub{state: core.ResumeState{Revision: 8, Data: "updated"}}
@@ -293,7 +255,7 @@ func TestPersistResumeStateEventsSavesUpdatedRevision(t *testing.T) {
 	events <- core.NewResumeStateUpdatedEvent("default", 8, false, time.Now())
 	close(events)
 	persistResumeStateEvents(context.Background(), events, provider, path)
-	state, err := loadResumeState(path)
+	state, err := resumestate.Load(path)
 	if err != nil {
 		t.Fatal(err)
 	}

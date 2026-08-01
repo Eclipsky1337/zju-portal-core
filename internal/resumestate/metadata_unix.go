@@ -1,6 +1,6 @@
 //go:build darwin || linux
 
-package main
+package resumestate
 
 import (
 	"fmt"
@@ -11,7 +11,7 @@ import (
 	"syscall"
 )
 
-type resumeStateFileMetadata struct {
+type fileMetadata struct {
 	mode fs.FileMode
 	uid  int
 	gid  int
@@ -22,8 +22,8 @@ type fileOwner struct {
 	gid int
 }
 
-func inspectResumeStateFile(path string) (resumeStateFileMetadata, error) {
-	metadata := resumeStateFileMetadata{mode: 0o600, uid: -1, gid: -1}
+func inspectFile(path string) (fileMetadata, error) {
+	metadata := fileMetadata{mode: 0o600, uid: -1, gid: -1}
 	existingOwner := fileOwner{uid: -1, gid: -1}
 	if info, err := os.Stat(path); err == nil {
 		metadata.mode = info.Mode().Perm()
@@ -37,13 +37,13 @@ func inspectResumeStateFile(path string) (resumeStateFileMetadata, error) {
 		return metadata, fmt.Errorf("stat resume state directory: %w", err)
 	}
 	directoryOwner := ownerFromFileInfo(directoryInfo)
-	owner := selectResumeStateOwner(os.Geteuid(), os.Getenv("SUDO_UID"), os.Getenv("SUDO_GID"), existingOwner, directoryOwner)
+	owner := selectOwner(os.Geteuid(), os.Getenv("SUDO_UID"), os.Getenv("SUDO_GID"), existingOwner, directoryOwner)
 	metadata.uid = owner.uid
 	metadata.gid = owner.gid
 	return metadata, nil
 }
 
-func applyResumeStateFileMetadata(file *os.File, metadata resumeStateFileMetadata) error {
+func applyFileMetadata(file *os.File, metadata fileMetadata) error {
 	if os.Geteuid() == 0 && metadata.uid >= 0 && metadata.gid >= 0 {
 		if err := file.Chown(metadata.uid, metadata.gid); err != nil {
 			return fmt.Errorf("set resume state owner: %w", err)
@@ -55,7 +55,7 @@ func applyResumeStateFileMetadata(file *os.File, metadata resumeStateFileMetadat
 	return nil
 }
 
-func selectResumeStateOwner(euid int, sudoUID, sudoGID string, existingOwner, directoryOwner fileOwner) fileOwner {
+func selectOwner(euid int, sudoUID, sudoGID string, existingOwner, directoryOwner fileOwner) fileOwner {
 	if euid == 0 {
 		uid, uidErr := strconv.Atoi(sudoUID)
 		gid, gidErr := strconv.Atoi(sudoGID)

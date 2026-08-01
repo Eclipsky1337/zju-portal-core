@@ -6,6 +6,7 @@ import (
 	"io"
 	"net"
 	"net/netip"
+	"reflect"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -544,7 +545,7 @@ func TestRuntimeReplacesVPNWithoutRestartingProxyServices(t *testing.T) {
 	}
 }
 
-func TestSelectiveTUNRequiresRestartWhenResourceRoutesChange(t *testing.T) {
+func TestSelectiveTUNUpdatesResourceRoutesWhenVPNIsReplaced(t *testing.T) {
 	firstResource := client.IPResource{
 		IPMin: net.ParseIP("192.0.2.1"), IPMax: net.ParseIP("192.0.2.255"),
 		PortMin: 1, PortMax: 65535, Protocol: "all",
@@ -554,6 +555,7 @@ func TestSelectiveTUNRequiresRestartWhenResourceRoutesChange(t *testing.T) {
 		PortMin: 1, PortMax: 65535, Protocol: "all",
 	}
 	firstClient := &clientStub{ipResources: []client.IPResource{firstResource}}
+	tunService := &routeUpdatingServiceStub{serviceStub: &serviceStub{address: testAddr("ZJU-Portal 172.19.0.1/30")}}
 	config := Config{
 		TCPTunnelMode:        true,
 		DisableRemoteDNS:     true,
@@ -564,7 +566,7 @@ func TestSelectiveTUNRequiresRestartWhenResourceRoutesChange(t *testing.T) {
 			return &outboundStub{}, nil
 		},
 		newTUNService: func(TUNConfig, core.Outbound, core.ConnectionObserver) (managedService, error) {
-			return &serviceStub{address: testAddr("ZJU-Portal 172.19.0.1/30")}, nil
+			return tunService, nil
 		},
 	}
 	runtime, err := New(context.Background(), firstClient, config)
@@ -573,17 +575,24 @@ func TestSelectiveTUNRequiresRestartWhenResourceRoutesChange(t *testing.T) {
 	}
 	defer runtime.Close(context.Background())
 
-	err = runtime.ReplaceVPN(context.Background(), &clientStub{ipResources: []client.IPResource{secondResource}}, config)
-	if core.ErrorCodeOf(err) != core.ErrorCodeRestartRequired {
-		t.Fatalf("ReplaceVPN() error = %v, want restart required", err)
+	secondClient := &clientStub{ipResources: []client.IPResource{secondResource}}
+	if err := runtime.ReplaceVPN(context.Background(), secondClient, config); err != nil {
+		t.Fatal(err)
 	}
-	conn, err := runtime.DialContext(context.Background(), "tcp", "192.0.2.8:443")
+	wantRoutes, err := buildResourceRoutePrefixes([]client.IPResource{secondResource}, nil, nil, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(tunService.updatedRoutes, wantRoutes) {
+		t.Fatalf("updated TUN routes = %v, want %v", tunService.updatedRoutes, wantRoutes)
+	}
+	conn, err := runtime.DialContext(context.Background(), "tcp", "198.51.100.8:443")
 	if err != nil {
 		t.Fatal(err)
 	}
 	_ = conn.Close()
-	if got := firstClient.dialCount.Load(); got != 1 {
-		t.Fatalf("original VPN dial count = %d, want 1", got)
+	if firstClient.dialCount.Load() != 0 || secondClient.dialCount.Load() != 1 {
+		t.Fatalf("VPN dial counts: first=%d second=%d", firstClient.dialCount.Load(), secondClient.dialCount.Load())
 	}
 }
 
@@ -668,6 +677,17 @@ type serviceStub struct {
 	runErr   error
 	started  atomic.Bool
 	closed   atomic.Bool
+}
+
+type routeUpdatingServiceStub struct {
+	*serviceStub
+	updatedRoutes []netip.Prefix
+	updateErr     error
+}
+
+func (service *routeUpdatingServiceStub) UpdateRouteAddresses(routes []netip.Prefix) error {
+	service.updatedRoutes = append([]netip.Prefix(nil), routes...)
+	return service.updateErr
 }
 
 type outboundStub struct {

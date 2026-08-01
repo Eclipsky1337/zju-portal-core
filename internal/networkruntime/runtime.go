@@ -293,9 +293,12 @@ func (runtime *Runtime) ReplaceVPN(ctx context.Context, vpnClient client.Client,
 		return runErr
 	}
 	if runtime.resourceRoutes && !equalRoutePrefixes(runtime.routeAddresses, backend.routes) {
-		runtime.backendMu.Unlock()
-		_ = backend.Close(context.Background())
-		return core.WrapError(core.ErrorCodeRestartRequired, "VPN resource routes changed; restart Core to update TUN routes", false, nil)
+		if err := runtime.updateTUNRouteAddresses(backend.routes); err != nil {
+			runtime.backendMu.Unlock()
+			_ = backend.Close(context.Background())
+			return err
+		}
+		runtime.routeAddresses = append([]netip.Prefix(nil), backend.routes...)
 	}
 	oldBackend := runtime.backend
 	runtime.backend = backend
@@ -307,6 +310,20 @@ func (runtime *Runtime) ReplaceVPN(ctx context.Context, vpnClient client.Client,
 		_ = oldBackend.Close(context.Background())
 	}
 	return nil
+}
+
+func (runtime *Runtime) updateTUNRouteAddresses(addresses []netip.Prefix) error {
+	for _, entry := range runtime.services {
+		if entry.typeName != core.ServiceTypeTUN {
+			continue
+		}
+		updater, ok := entry.service.(tunRouteUpdater)
+		if !ok {
+			return core.WrapError(core.ErrorCodeRestartRequired, "TUN service does not support updating VPN resource routes", false, nil)
+		}
+		return updater.UpdateRouteAddresses(addresses)
+	}
+	return core.WrapError(core.ErrorCodeTUNUnavailable, "TUN service is unavailable while updating VPN resource routes", false, nil)
 }
 
 func (runtime *Runtime) TrafficStats() core.TrafficStats {

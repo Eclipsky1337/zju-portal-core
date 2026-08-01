@@ -50,6 +50,10 @@ type TUNConfig struct {
 	SystemDNS         systemdns.Controller
 }
 
+type tunRouteUpdater interface {
+	UpdateRouteAddresses([]netip.Prefix) error
+}
+
 type tunService struct {
 	config    TUNConfig
 	outbound  core.Outbound
@@ -60,6 +64,7 @@ type tunService struct {
 	mu               sync.RWMutex
 	device           tun.Tun
 	stack            tun.Stack
+	routeOptions     tun.Options
 	networkMonitor   tun.NetworkUpdateMonitor
 	interfaceMonitor tun.DefaultInterfaceMonitor
 	addr             net.Addr
@@ -191,6 +196,7 @@ func (service *tunService) createDevice(options tun.Options) (tun.Tun, error) {
 		return nil, err
 	}
 	service.mu.Lock()
+	service.routeOptions = options
 	service.networkMonitor = networkMonitor
 	service.interfaceMonitor = interfaceMonitor
 	service.mu.Unlock()
@@ -276,6 +282,11 @@ func (service *tunService) start(ctx context.Context) error {
 		_ = service.closeMonitors()
 		return fmt.Errorf("start TUN device: %w", err)
 	}
+	service.mu.Lock()
+	if service.routeOptions.Name == "" {
+		service.routeOptions = options
+	}
+	service.mu.Unlock()
 	monitoredDevice := wrapTUNDevice(device, service.handleDeviceError)
 	stack, err := service.newStack(tunStackName(service.config.Stack), tun.StackOptions{
 		Context:    ctx,
@@ -327,7 +338,11 @@ func (service *tunService) start(ctx context.Context) error {
 }
 
 func (service *tunService) routeAddresses() []netip.Prefix {
-	routes := append([]netip.Prefix(nil), service.config.RouteAddresses...)
+	return service.routeAddressesFor(service.config.RouteAddresses)
+}
+
+func (service *tunService) routeAddressesFor(addresses []netip.Prefix) []netip.Prefix {
+	routes := append([]netip.Prefix(nil), addresses...)
 	if len(routes) == 0 || !service.config.DNSHijack {
 		return routes
 	}
@@ -341,6 +356,31 @@ func (service *tunService) routeAddresses() []netip.Prefix {
 		}
 	}
 	return append(routes, netip.PrefixFrom(dnsAddress, dnsAddress.BitLen()))
+}
+
+func (service *tunService) UpdateRouteAddresses(addresses []netip.Prefix) error {
+	service.mu.Lock()
+	if service.closed || service.device == nil {
+		service.mu.Unlock()
+		return core.WrapError(core.ErrorCodeTUNUnavailable, "update TUN resource routes", false, nil)
+	}
+	oldOptions := service.routeOptions
+	newOptions := oldOptions
+	newOptions.Inet4RouteAddress = service.routeAddressesFor(addresses)
+	if err := service.device.UpdateRouteOptions(newOptions); err != nil {
+		rollbackErr := service.device.UpdateRouteOptions(oldOptions)
+		service.mu.Unlock()
+		if rollbackErr != nil {
+			combinedErr := errors.Join(err, fmt.Errorf("restore previous TUN routes: %w", rollbackErr))
+			service.handleDeviceError(combinedErr)
+			return core.WrapError(core.ErrorCodeTUNUnavailable, "update TUN resource routes", false, combinedErr)
+		}
+		return core.WrapError(core.ErrorCodeRouteSetupFailed, "update TUN resource routes", true, err)
+	}
+	service.routeOptions = newOptions
+	service.config.RouteAddresses = append([]netip.Prefix(nil), addresses...)
+	service.mu.Unlock()
+	return nil
 }
 
 func tunStackName(configured string) string {
